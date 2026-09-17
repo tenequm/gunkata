@@ -10,8 +10,11 @@
 #
 # Model routing per work shape (run 1 put flash-low on every role and produced
 # one finding):
-#   lens-correctness, lens-tests  gemini-3.1-pro-high, the strongest gemini on
-#                                 offer, for the two reasoning-heavy lenses
+#   lens-correctness, lens-tests  gemini-3.8-flash-high, the newest generation
+#                                 at its highest effort, for the two
+#                                 reasoning-heavy lenses (the ACP lane does not
+#                                 advertise gemini-3.1-pro-high; run
+#                                 20260917T230923Z209c parked on it pre-turn)
 #   lens-callpaths                gemini-3.7-flash-medium: a whole-repository
 #                                 sweep pays in breadth and tool calls, not in
 #                                 depth per hunk
@@ -43,7 +46,7 @@ defaults:
 
 nodes:
   - name: lens-correctness
-    model: gemini-3.1-pro-high
+    model: gemini-3.8-flash-high
     timeout_seconds: 900
     prompt: &prompt-correctness |
       You are reviewing one pull request for correctness. Report findings only;
@@ -171,7 +174,7 @@ nodes:
     check: *check-findings
 
   - name: lens-tests
-    model: gemini-3.1-pro-high
+    model: gemini-3.8-flash-high
     timeout_seconds: 900
     prompt: &prompt-tests |
       You are reviewing one pull request for test coverage and regression risk.
@@ -492,6 +495,9 @@ nodes:
   - name: shadow-lens-correctness
     agent: acpx:pi
     model: litellm/qwen3.8-flash-next
+    # The free lane reasons slowly; 600s parked two of three twins on run
+    # 20260917T230923Z209c.
+    timeout_seconds: 900
     prompt: *prompt-correctness
     artifact: shadow-lens-correctness.json
     check: *check-findings
@@ -499,6 +505,7 @@ nodes:
   - name: shadow-lens-callpaths
     agent: acpx:pi
     model: litellm/qwen3.8-flash-next
+    timeout_seconds: 900
     prompt: *prompt-callpaths
     artifact: shadow-lens-callpaths.json
     check: *check-findings
@@ -506,6 +513,7 @@ nodes:
   - name: shadow-lens-tests
     agent: acpx:pi
     model: litellm/qwen3.8-flash-next
+    timeout_seconds: 900
     prompt: *prompt-tests
     artifact: shadow-lens-tests.json
     check: *check-findings
