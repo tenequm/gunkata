@@ -24,8 +24,9 @@ moved one at a time).
      user-level skills/extensions/MCP hang off HOME and must not leak into
      bare executor homes);
    - support acpx built-in agent modes (`acpx pi ...`) alongside `--agent`.
-4. Optional rider, non-gating: qwen shadow twins of each lens via pi
-   (requirement B7 - data collection that never gates). Free lane:
+4. Committed rider (operator decision 2026-09-17), non-gating: qwen shadow
+   twins of each lens via pi (requirement B7 - data collection that never
+   gates). Free lane:
    `litellm/qwen3.8-flash-next` (209 tok/s), `litellm/qwen3.8-27b-nvfp4`
    (78 tok/s), 262k context, zero cost.
 
