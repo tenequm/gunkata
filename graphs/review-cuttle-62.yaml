@@ -15,6 +15,12 @@
 # Shape: 4 independent lenses -> one verify per lens -> one reconcile.
 # The lenses find, the verifies re-derive each finding from the actual code
 # (G2/G3), and reconcile keeps every finding exactly once (G5).
+#
+# Every finding carries a "rubric": an acceptance test, "run X, expect Y",
+# that someone else can carry out. The verifies execute the rubric and let its
+# outcome decide the verdict rather than re-reading the reviewer's prose, and
+# each check enforces the cap - a finding whose rubric begins with "none" is
+# unfalsifiable and may not rise above severity "suggestion".
 name: review-cuttle-62
 
 inputs:
@@ -74,6 +80,20 @@ nodes:
       Read the actual file contents in the checkout, not only the diff hunks.
       Ignore style and naming; report behaviour.
 
+      RUBRIC - every finding carries one
+      A finding is not an opinion; it is a check someone else can run. Give
+      each one a "rubric": an acceptance test in the form "run X, expect Y",
+      where X is a command with its arguments or a concrete observation
+      someone can make of this repository, and Y is the outcome that proves
+      the finding. Write it so a verifier with read access to this checkout
+      can carry it out and get a yes or a no - name the file to open and the
+      line to look at, the input to trace and the value that must come out,
+      the command and the output it must produce. "Review the logic" and
+      "consider whether" are not rubrics. When you genuinely cannot state one,
+      write a rubric beginning with the word "none" followed by one sentence
+      saying why no check can be stated, and set that finding's severity to
+      "suggestion": an unfalsifiable finding never rises higher than that.
+
       OUTPUT
       Write your findings to {{artifact}} and write nothing else to that file.
       The file must contain VALID JSON and nothing else: no prose, no markdown
@@ -82,13 +102,15 @@ nodes:
         "id"       - string, "lens-correctness-N" with N counting from 1
         "file"     - string, repository-relative path of the offending file
         "line"     - integer, the line in that file the finding points at
-        "severity" - string, one of "high", "medium", "low"
+        "severity" - string, one of "high", "medium", "low", "suggestion"
         "summary"  - string, one sentence stating the defect
         "evidence" - string, the quoted code that shows it
+        "rubric"   - string, the acceptance test, "run X, expect Y", or a
+                     "none ..." string when none can be stated
       If you find nothing, write exactly [] to that file. Ask no questions.
       Stop as soon as the file is written.
     artifact: lens-correctness.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\") and (.rubric | type == \"string\") and (.rubric | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
 
   - name: lens-callpaths
     prompt: |
@@ -136,6 +158,20 @@ nodes:
       Read the actual file contents, not only search hits. A finding must name
       the concrete file and line that disagrees.
 
+      RUBRIC - every finding carries one
+      A finding is not an opinion; it is a check someone else can run. Give
+      each one a "rubric": an acceptance test in the form "run X, expect Y",
+      where X is a command with its arguments or a concrete observation
+      someone can make of this repository, and Y is the outcome that proves
+      the finding. Write it so a verifier with read access to this checkout
+      can carry it out and get a yes or a no - name the file to open and the
+      line to look at, the input to trace and the value that must come out,
+      the command and the output it must produce. "Review the logic" and
+      "consider whether" are not rubrics. When you genuinely cannot state one,
+      write a rubric beginning with the word "none" followed by one sentence
+      saying why no check can be stated, and set that finding's severity to
+      "suggestion": an unfalsifiable finding never rises higher than that.
+
       OUTPUT
       Write your findings to {{artifact}} and write nothing else to that file.
       The file must contain VALID JSON and nothing else: no prose, no markdown
@@ -144,13 +180,15 @@ nodes:
         "id"       - string, "lens-callpaths-N" with N counting from 1
         "file"     - string, repository-relative path of the offending file
         "line"     - integer, the line in that file the finding points at
-        "severity" - string, one of "high", "medium", "low"
+        "severity" - string, one of "high", "medium", "low", "suggestion"
         "summary"  - string, one sentence stating the disagreement
         "evidence" - string, the quoted code that shows it
+        "rubric"   - string, the acceptance test, "run X, expect Y", or a
+                     "none ..." string when none can be stated
       If you find nothing, write exactly [] to that file. Ask no questions.
       Stop as soon as the file is written.
     artifact: lens-callpaths.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\") and (.rubric | type == \"string\") and (.rubric | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
 
   - name: lens-tests
     prompt: |
@@ -196,6 +234,20 @@ nodes:
         in it fail the job?
       Read the actual test and workflow files, not only the diff hunks.
 
+      RUBRIC - every finding carries one
+      A finding is not an opinion; it is a check someone else can run. Give
+      each one a "rubric": an acceptance test in the form "run X, expect Y",
+      where X is a command with its arguments or a concrete observation
+      someone can make of this repository, and Y is the outcome that proves
+      the finding. Write it so a verifier with read access to this checkout
+      can carry it out and get a yes or a no - name the file to open and the
+      line to look at, the input to trace and the value that must come out,
+      the command and the output it must produce. "Review the logic" and
+      "consider whether" are not rubrics. When you genuinely cannot state one,
+      write a rubric beginning with the word "none" followed by one sentence
+      saying why no check can be stated, and set that finding's severity to
+      "suggestion": an unfalsifiable finding never rises higher than that.
+
       OUTPUT
       Write your findings to {{artifact}} and write nothing else to that file.
       The file must contain VALID JSON and nothing else: no prose, no markdown
@@ -205,13 +257,15 @@ nodes:
         "file"     - string, repository-relative path of the file the finding is
                      about (for a missing test, the file that should hold it)
         "line"     - integer, the line in that file the finding points at
-        "severity" - string, one of "high", "medium", "low"
+        "severity" - string, one of "high", "medium", "low", "suggestion"
         "summary"  - string, one sentence stating the gap or the defect
         "evidence" - string, the quoted code that shows it
+        "rubric"   - string, the acceptance test, "run X, expect Y", or a
+                     "none ..." string when none can be stated
       If you find nothing, write exactly [] to that file. Ask no questions.
       Stop as soon as the file is written.
     artifact: lens-tests.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\") and (.rubric | type == \"string\") and (.rubric | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
 
   - name: lens-claims
     prompt: |
@@ -276,6 +330,20 @@ nodes:
       sentence that is merely vague, awkward or unidiomatic is not a finding;
       a sentence the code disproves is.
 
+      RUBRIC - every finding carries one
+      A finding is not an opinion; it is a check someone else can run. Give
+      each one a "rubric": an acceptance test in the form "run X, expect Y",
+      where X is a command with its arguments or a concrete observation
+      someone can make of this repository, and Y is the outcome that proves
+      the finding. Write it so a verifier with read access to this checkout
+      can carry it out and get a yes or a no - name the file to open and the
+      line to look at, the input to trace and the value that must come out,
+      the command and the output it must produce. "Review the logic" and
+      "consider whether" are not rubrics. When you genuinely cannot state one,
+      write a rubric beginning with the word "none" followed by one sentence
+      saying why no check can be stated, and set that finding's severity to
+      "suggestion": an unfalsifiable finding never rises higher than that.
+
       OUTPUT
       Write your findings to {{artifact}} and write nothing else to that file.
       The file must contain VALID JSON and nothing else: no prose, no markdown
@@ -287,15 +355,17 @@ nodes:
                      the claim is in the pull request's description
         "line"     - integer, the line holding the claim, counted in that file
                      or, for the description, in the description text
-        "severity" - string, one of "high", "medium", "low"
+        "severity" - string, one of "high", "medium", "low", "suggestion"
         "summary"  - string, one sentence stating the claim and what the code
                      actually does instead
         "evidence" - string, the quoted claim together with the quoted code
                      that disproves it, naming the authority file you read
+        "rubric"   - string, the acceptance test, "run X, expect Y", or a
+                     "none ..." string when none can be stated
       If you find nothing, write exactly [] to that file. Ask no questions.
       Stop as soon as the file is written.
     artifact: lens-claims.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\") and (.rubric | type == \"string\") and (.rubric | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
 
   - name: verify-correctness
     needs: [lens-correctness]
@@ -321,12 +391,20 @@ nodes:
       1. Open the file it names in the checkout and read the code around the
          line it names. The reviewer's quoted evidence may be paraphrased,
          mislocated or invented - the file is the authority.
-      2. Decide whether the defect the summary describes is really present in
-         that code, for the reason given. Reason it through concretely: what
-         input reaches that code, what it produces, what the caller does with
-         it. A finding that is real but for a different reason than stated is
-         "confirmed"; correct its summary. A finding whose code does not say
-         what the reviewer claims is "rejected".
+      2. Carry out the finding's rubric. Its outcome, not your impression of
+         the reviewer's prose, decides the verdict. The rubric states a check
+         in the form "run X, expect Y": run that command in this checkout, or
+         make that observation of it, and compare what actually comes out with
+         what the rubric expected. Where the rubric is an observation rather
+         than a command, make it concretely: what input reaches that code, what
+         it produces, what the caller does with it. The expectation holds, so
+         the verdict is "confirmed"; it does not hold, so the verdict is
+         "rejected". A finding that is real but for a different reason than
+         stated is "confirmed"; correct its summary. If the reviewer's rubric
+         was too vague to carry out, sharpen it until it can be carried out and
+         report the sharpened wording. A rubric beginning with "none" has
+         nothing to execute: judge the finding by reading the code, and leave
+         its severity at "suggestion".
       3. Record the exact evidence you read: the file and line you verified at,
          and the actual content of that line copied verbatim from the file.
       Keep the reviewer's id, and keep every finding - reject, never drop. If
@@ -341,17 +419,23 @@ nodes:
         "id"                 - string, the reviewer's id, unchanged
         "file"               - string, repository-relative path
         "line"               - integer
-        "severity"           - string, one of "high", "medium", "low"; correct
-                               the reviewer's if your reading disagrees
+        "severity"           - string, one of "high", "medium", "low",
+                               "suggestion"; correct the reviewer's if your
+                               reading disagrees
         "summary"            - string, one sentence; corrected if needed
         "verdict"            - string, "confirmed" or "rejected"
         "verified_evidence"  - string, "<file>:<line>: <the actual content of
                                that line, copied from the file>", plus one
                                sentence saying what that line proves
+        "rubric"             - string, the rubric you actually carried out:
+                               the reviewer's, or your sharpened wording of it
+        "rubric_outcome"     - string, what carrying it out actually produced
+                               and whether that is what the rubric expected;
+                               "not executed: <why>" for a "none ..." rubric
       If the reviewer's array was empty, write exactly [] to that file. Ask no
       questions. Stop as soon as the file is written.
     artifact: verify-correctness.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\") and (.rubric | type == \"string\") and (.rubric | length > 0) and (.rubric_outcome | type == \"string\") and (.rubric_outcome | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
 
   - name: verify-callpaths
     needs: [lens-callpaths]
@@ -378,13 +462,23 @@ nodes:
       1. Open the file it names in the checkout and read the code around the
          line it names. The reviewer's quoted evidence may be paraphrased,
          mislocated or invented - the file is the authority.
-      2. Follow the call path yourself from that line to the viewer page or the
-         websocket URL, and decide whether the disagreement is real: does that
-         code actually run in the prefixed deployment, does it actually assume a
-         root prefix, would it actually break. Dead code, a path that never
-         reaches the viewer, or an assumption the code does not in fact make is
-         "rejected". A finding that is real but for a different reason than
-         stated is "confirmed"; correct its summary.
+      2. Carry out the finding's rubric. Its outcome, not your impression of
+         the reviewer's prose, decides the verdict. The rubric states a check
+         in the form "run X, expect Y": run that command in this checkout, or
+         make that observation of it, and compare what actually comes out with
+         what the rubric expected. Where the rubric is an observation rather
+         than a command, make it concretely: follow the call path yourself from
+         that line to the viewer page or the websocket URL, and see whether
+         that code actually runs in the prefixed deployment, actually assumes a
+         root prefix, would actually break. The expectation holds, so the
+         verdict is "confirmed"; it does not hold - dead code, a path that
+         never reaches the viewer, an assumption the code does not in fact make
+         - so the verdict is "rejected". A finding that is real but for a
+         different reason than stated is "confirmed"; correct its summary. If
+         the reviewer's rubric was too vague to carry out, sharpen it until it
+         can be carried out and report the sharpened wording. A rubric
+         beginning with "none" has nothing to execute: judge the finding by
+         reading the code, and leave its severity at "suggestion".
       3. Record the exact evidence you read: the file and line you verified at,
          and the actual content of that line copied verbatim from the file.
       Keep the reviewer's id, and keep every finding - reject, never drop. If
@@ -399,17 +493,23 @@ nodes:
         "id"                 - string, the reviewer's id, unchanged
         "file"               - string, repository-relative path
         "line"               - integer
-        "severity"           - string, one of "high", "medium", "low"; correct
-                               the reviewer's if your reading disagrees
+        "severity"           - string, one of "high", "medium", "low",
+                               "suggestion"; correct the reviewer's if your
+                               reading disagrees
         "summary"            - string, one sentence; corrected if needed
         "verdict"            - string, "confirmed" or "rejected"
         "verified_evidence"  - string, "<file>:<line>: <the actual content of
                                that line, copied from the file>", plus one
                                sentence saying what that line proves
+        "rubric"             - string, the rubric you actually carried out:
+                               the reviewer's, or your sharpened wording of it
+        "rubric_outcome"     - string, what carrying it out actually produced
+                               and whether that is what the rubric expected;
+                               "not executed: <why>" for a "none ..." rubric
       If the reviewer's array was empty, write exactly [] to that file. Ask no
       questions. Stop as soon as the file is written.
     artifact: verify-callpaths.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\") and (.rubric | type == \"string\") and (.rubric | length > 0) and (.rubric_outcome | type == \"string\") and (.rubric_outcome | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
 
   - name: verify-tests
     needs: [lens-tests]
@@ -436,14 +536,23 @@ nodes:
       1. Open the file it names in the checkout and read the test or workflow
          code around the line it names. The reviewer's quoted evidence may be
          paraphrased, mislocated or invented - the file is the authority.
-      2. Decide whether the claim holds by tracing the assertion: for a claimed
-         coverage gap, search the repository for any assertion that would fail
-         under the change the reviewer says is untested - if one exists, the
-         finding is "rejected". For a claimed weak or misleading test, read what
-         the harness actually does on that path and decide whether it can pass
-         while the behaviour is broken. For a claimed stale test, read what it
-         asserts now. A finding that is real but for a different reason than
-         stated is "confirmed"; correct its summary.
+      2. Carry out the finding's rubric. Its outcome, not your impression of
+         the reviewer's prose, decides the verdict. The rubric states a check
+         in the form "run X, expect Y"; because you may not run the test suite,
+         carry it out by reading instead, and evaluate it concretely: for a
+         claimed coverage gap, search the repository for any assertion that
+         would fail under the change the reviewer says is untested - if one
+         exists, the expectation does not hold. For a claimed weak or
+         misleading test, read what the harness actually does on that path and
+         decide whether it can pass while the behaviour is broken. For a
+         claimed stale test, read what it asserts now. The expectation holds,
+         so the verdict is "confirmed"; it does not hold, so the verdict is
+         "rejected". A finding that is real but for a different reason than
+         stated is "confirmed"; correct its summary. If the reviewer's rubric
+         was too vague to carry out, sharpen it until it can be carried out and
+         report the sharpened wording. A rubric beginning with "none" has
+         nothing to evaluate: judge the finding by reading the test, and leave
+         its severity at "suggestion".
       3. Record the exact evidence you read: the file and line you verified at,
          and the actual content of that line copied verbatim from the file.
       Keep the reviewer's id, and keep every finding - reject, never drop. If
@@ -458,17 +567,23 @@ nodes:
         "id"                 - string, the reviewer's id, unchanged
         "file"               - string, repository-relative path
         "line"               - integer
-        "severity"           - string, one of "high", "medium", "low"; correct
-                               the reviewer's if your reading disagrees
+        "severity"           - string, one of "high", "medium", "low",
+                               "suggestion"; correct the reviewer's if your
+                               reading disagrees
         "summary"            - string, one sentence; corrected if needed
         "verdict"            - string, "confirmed" or "rejected"
         "verified_evidence"  - string, "<file>:<line>: <the actual content of
                                that line, copied from the file>", plus one
                                sentence saying what that line proves
+        "rubric"             - string, the rubric you actually carried out:
+                               the reviewer's, or your sharpened wording of it
+        "rubric_outcome"     - string, what carrying it out actually produced
+                               and whether that is what the rubric expected;
+                               "not executed: <why>" for a "none ..." rubric
       If the reviewer's array was empty, write exactly [] to that file. Ask no
       questions. Stop as soon as the file is written.
     artifact: verify-tests.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\") and (.rubric | type == \"string\") and (.rubric | length > 0) and (.rubric_outcome | type == \"string\") and (.rubric_outcome | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
 
   - name: verify-claims
     needs: [lens-claims]
@@ -499,14 +614,24 @@ nodes:
          "PULL_REQUEST_DESCRIPTION". The reviewer's quotation may be
          paraphrased, mislocated or invented - the source is the authority. If
          the claim is not there as quoted, the verdict is "rejected".
-      2. Settle the claim yourself. Name the file whose contents decide it and
-         READ THAT FILE END TO END, first line to last; do not grep it for the
-         claim's words and read the hits, because the line that disproves a
-         claim rarely contains them. Then decide what the code actually does
-         and whether the claim survives it. A claim the code supports, or one
-         that is imprecise without being false, is "rejected". A claim the code
-         disproves is "confirmed"; if it is false for a different reason than
-         the reviewer gave, correct the summary and confirm it.
+      2. Carry out the finding's rubric. Its outcome, not your impression of
+         the reviewer's prose, decides the verdict. The rubric states a check
+         in the form "run X, expect Y": run that command in this checkout, or
+         make that observation of it, and compare what actually comes out with
+         what the rubric expected. Where the rubric is an observation rather
+         than a command, settle the claim yourself: name the file whose
+         contents decide it and READ THAT FILE END TO END, first line to last;
+         do not grep it for the claim's words and read the hits, because the
+         line that disproves a claim rarely contains them. The expectation
+         holds - the code disproves the claim - so the verdict is "confirmed";
+         it does not hold, because the code supports the claim or the claim is
+         imprecise without being false, so the verdict is "rejected". A claim
+         that is false for a different reason than the reviewer gave is
+         "confirmed"; correct its summary. If the reviewer's rubric was too
+         vague to carry out, sharpen it until it can be carried out and report
+         the sharpened wording. A rubric beginning with "none" has nothing to
+         execute: settle the claim by reading its authority file end to end,
+         and leave the finding's severity at "suggestion".
       3. Record the exact evidence you read: the file and line you verified at,
          and the actual content of that line copied verbatim from the file.
       Keep the reviewer's id, and keep every finding - reject, never drop. If
@@ -522,17 +647,23 @@ nodes:
         "file"               - string, repository-relative path, or
                                "PULL_REQUEST_DESCRIPTION"
         "line"               - integer
-        "severity"           - string, one of "high", "medium", "low"; correct
-                               the reviewer's if your reading disagrees
+        "severity"           - string, one of "high", "medium", "low",
+                               "suggestion"; correct the reviewer's if your
+                               reading disagrees
         "summary"            - string, one sentence; corrected if needed
         "verdict"            - string, "confirmed" or "rejected"
         "verified_evidence"  - string, "<file>:<line>: <the actual content of
                                that line, copied from the file>", plus one
                                sentence saying what that line proves
+        "rubric"             - string, the rubric you actually carried out:
+                               the reviewer's, or your sharpened wording of it
+        "rubric_outcome"     - string, what carrying it out actually produced
+                               and whether that is what the rubric expected;
+                               "not executed: <why>" for a "none ..." rubric
       If the reviewer's array was empty, write exactly [] to that file. Ask no
       questions. Stop as soon as the file is written.
     artifact: verify-claims.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\") and (.rubric | type == \"string\") and (.rubric | length > 0) and (.rubric_outcome | type == \"string\") and (.rubric_outcome | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
 
   - name: reconcile
     needs: [verify-correctness, verify-callpaths, verify-tests, verify-claims]
@@ -562,8 +693,12 @@ nodes:
          survivor's id. A survivor is never a duplicate of anything.
       3. A non-duplicate finding takes the disposition "confirmed" or "rejected"
          from its verdict, unchanged.
-      4. Order the output by severity, "high" first, then "medium", then "low";
-         within a severity, confirmed before rejected before duplicate.
+      4. Order the output by severity, "high" first, then "medium", then "low",
+         then "suggestion"; within a severity, confirmed before rejected before
+         duplicate.
+      5. Carry each finding's "rubric" and "rubric_outcome" through unchanged.
+         They are the executable record of why the finding was believed or not;
+         a ledger entry without them cannot be re-checked later.
 
       OUTPUT
       Write to {{artifact}} and write nothing else to that file. The file must
@@ -577,13 +712,16 @@ nodes:
         "file"               - string, repository-relative path, or
                                "PULL_REQUEST_DESCRIPTION"
         "line"               - integer
-        "severity"           - string, one of "high", "medium", "low"
+        "severity"           - string, one of "high", "medium", "low",
+                               "suggestion"
         "summary"            - string, one sentence
         "verified_evidence"  - string, carried over unchanged
+        "rubric"             - string, carried over unchanged
+        "rubric_outcome"     - string, carried over unchanged
         "disposition"        - string, "confirmed", "rejected" or "duplicate"
         "duplicate_of"       - string, present only when disposition is
                                "duplicate", holding the surviving finding's id
       If all four inputs were empty, write exactly [] to that file. Ask no
       questions. Stop as soon as the file is written.
     artifact: ledger.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; (.disposition == \"confirmed\" or .disposition == \"rejected\" or .disposition == \"duplicate\") and (.disposition != \"duplicate\" or has(\"duplicate_of\")) and has(\"id\"))", "{{artifact}}"]
+    check: ["jq", "-e", "type == \"array\" and all(.[]; (.disposition == \"confirmed\" or .disposition == \"rejected\" or .disposition == \"duplicate\") and (.disposition != \"duplicate\" or has(\"duplicate_of\")) and has(\"id\") and (.rubric | type == \"string\") and (.rubric | length > 0) and ((.rubric | ascii_downcase | startswith(\"none\") | not) or .severity == \"suggestion\"))", "{{artifact}}"]
