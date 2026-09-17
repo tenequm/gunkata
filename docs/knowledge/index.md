@@ -49,4 +49,5 @@ Enter through this listing and open only what the task needs.
 
 # References
 
+* [Executor models field guide](references/executor-models-field-guide.md) - What each executor family advertises over ACP, what has actually been measured about those models, and the traps that make a wrong choice look like an infrastructure fault - the answer to "which model goes on this node".
 * [pond PR 289 as a review ground-truth case](references/pond-pr-289-review-ground-truth.md) - A hand /polish review of tenequm/pond#289 (lance 12 upgrade) with 8 findings and 10 validated non-findings, pinned to head 6a83a53, held as the grading key for a future replay of the gunkata review flow.
