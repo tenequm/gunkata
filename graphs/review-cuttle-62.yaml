@@ -7,6 +7,30 @@
 # Shape: 3 independent lenses -> one verify per lens -> one reconcile.
 # The lenses find, the verifies re-derive each finding from the actual code
 # (G2/G3), and reconcile keeps every finding exactly once (G5).
+#
+# Model routing per work shape (run 1 put flash-low on every role and produced
+# one finding):
+#   lens-correctness, lens-tests  gemini-3.1-pro-high, the strongest gemini on
+#                                 offer, for the two reasoning-heavy lenses
+#   lens-callpaths                gemini-3.7-flash-medium: a whole-repository
+#                                 sweep pays in breadth and tool calls, not in
+#                                 depth per hunk
+#   verify-*                      codex gpt-5.6-sol - a different model family
+#                                 from every lens, so no verifier rules on its
+#                                 own output (self-preference runs over 50%)
+#   reconcile                     gemini-3.7-flash-medium: a merge, not a
+#                                 judgement
+#
+# The verify prompts are blinded: they name no lens, state nothing about what
+# the findings were looking for, and push toward neither verdict. Each verify
+# gets the findings JSON, the diff and the code, and rules on each claim
+# independently.
+#
+# shadow-* are riders, not steps: each runs its lens's prompt verbatim (a YAML
+# alias, so the two prompts cannot drift) on the free qwen lane via pi. Nothing
+# needs them and they need nothing, so their findings are data to compare
+# against, never evidence anything releases on. A parked shadow node is a
+# result too.
 name: review-cuttle-62
 
 inputs:
@@ -14,12 +38,14 @@ inputs:
 
 defaults:
   agent: agy-acp-server
-  model: gemini-3.7-flash-low
+  model: gemini-3.7-flash-medium
   timeout_seconds: 600
 
 nodes:
   - name: lens-correctness
-    prompt: |
+    model: gemini-3.1-pro-high
+    timeout_seconds: 900
+    prompt: &prompt-correctness |
       You are reviewing one pull request for correctness. Report findings only;
       change nothing.
 
@@ -79,10 +105,11 @@ nodes:
       If you find nothing, write exactly [] to that file. Ask no questions.
       Stop as soon as the file is written.
     artifact: lens-correctness.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
+    check: &check-findings ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
 
   - name: lens-callpaths
-    prompt: |
+    model: gemini-3.7-flash-medium
+    prompt: &prompt-callpaths |
       You are reviewing one pull request for the agreement between the change
       and the rest of the repository. Report findings only; change nothing.
 
@@ -141,10 +168,12 @@ nodes:
       If you find nothing, write exactly [] to that file. Ask no questions.
       Stop as soon as the file is written.
     artifact: lens-callpaths.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
+    check: *check-findings
 
   - name: lens-tests
-    prompt: |
+    model: gemini-3.1-pro-high
+    timeout_seconds: 900
+    prompt: &prompt-tests |
       You are reviewing one pull request for test coverage and regression risk.
       Report findings only; change nothing.
 
@@ -202,133 +231,24 @@ nodes:
       If you find nothing, write exactly [] to that file. Ask no questions.
       Stop as soon as the file is written.
     artifact: lens-tests.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
+    check: *check-findings
 
   - name: verify-correctness
     needs: [lens-correctness]
+    agent: acpx:codex
+    model: gpt-5.6-sol
+    timeout_seconds: 900
     prompt: |
-      A reviewer produced findings about pull request glim-sh/cuttle #62
-      ("fix(viewer): keep websocket inside proxy prefix"). Reviewer findings are
-      frequently wrong. Your job is to re-derive every one of them from the
-      actual code and rule on it. Believe a finding for what it points at, never
-      because the reviewer asserted it.
+      You are given a set of findings about one pull request and the code they
+      are about. Nothing is said about who produced them, what they were looking
+      for, or how many of them are real. Rule on each one yourself.
+
+      PULL REQUEST
+      glim-sh/cuttle #62, "fix(viewer): keep websocket inside proxy prefix"
+      (+388/-7, 4 files).
 
       MATERIALS
-      - The reviewer's findings, a JSON array: {{artifact:lens-correctness}}
-      - The unified diff of the pull request: {{input:diff}}
-      - The repository, checked out at the pull request's head commit
-        8fd8af8f96ca8f5cba5975c9228f2cb5e252c6e3:
-        /home/tenequm/pjv/glim-sh/cuttle
-        READ ONLY. Never write, create, delete, move, rename, stage, commit,
-        checkout or otherwise modify anything under that directory, and never
-        run a command that would. Read files and search them; that is all.
-
-      METHOD
-      For each finding, in order:
-      1. Open the file it names in the checkout and read the code around the
-         line it names. The reviewer's quoted evidence may be paraphrased,
-         mislocated or invented - the file is the authority.
-      2. Decide whether the defect the summary describes is really present in
-         that code, for the reason given. Reason it through concretely: what
-         input reaches that code, what it produces, what the caller does with
-         it. A finding that is real but for a different reason than stated is
-         "confirmed"; correct its summary. A finding whose code does not say
-         what the reviewer claims is "rejected".
-      3. Record the exact evidence you read: the file and line you verified at,
-         and the actual content of that line copied verbatim from the file.
-      Keep the reviewer's id, and keep every finding - reject, never drop. If
-      the reviewer's file or line does not exist, the verdict is "rejected" and
-      the evidence says so.
-
-      OUTPUT
-      Write to {{artifact}} and write nothing else to that file. The file must
-      contain VALID JSON and nothing else: no prose, no markdown fence, no
-      comment. It is a JSON array with one element per reviewer finding, in the
-      reviewer's order, each an object with exactly these keys:
-        "id"                 - string, the reviewer's id, unchanged
-        "file"               - string, repository-relative path
-        "line"               - integer
-        "severity"           - string, one of "high", "medium", "low"; correct
-                               the reviewer's if your reading disagrees
-        "summary"            - string, one sentence; corrected if needed
-        "verdict"            - string, "confirmed" or "rejected"
-        "verified_evidence"  - string, "<file>:<line>: <the actual content of
-                               that line, copied from the file>", plus one
-                               sentence saying what that line proves
-      If the reviewer's array was empty, write exactly [] to that file. Ask no
-      questions. Stop as soon as the file is written.
-    artifact: verify-correctness.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
-
-  - name: verify-callpaths
-    needs: [lens-callpaths]
-    prompt: |
-      A reviewer produced findings about pull request glim-sh/cuttle #62
-      ("fix(viewer): keep websocket inside proxy prefix"), looking for places in
-      the repository that disagree with the change. Reviewer findings are
-      frequently wrong. Your job is to re-derive every one of them from the
-      actual code and rule on it. Believe a finding for what it points at, never
-      because the reviewer asserted it.
-
-      MATERIALS
-      - The reviewer's findings, a JSON array: {{artifact:lens-callpaths}}
-      - The unified diff of the pull request: {{input:diff}}
-      - The repository, checked out at the pull request's head commit
-        8fd8af8f96ca8f5cba5975c9228f2cb5e252c6e3:
-        /home/tenequm/pjv/glim-sh/cuttle
-        READ ONLY. Never write, create, delete, move, rename, stage, commit,
-        checkout or otherwise modify anything under that directory, and never
-        run a command that would. Read files and search them; that is all.
-
-      METHOD
-      For each finding, in order:
-      1. Open the file it names in the checkout and read the code around the
-         line it names. The reviewer's quoted evidence may be paraphrased,
-         mislocated or invented - the file is the authority.
-      2. Follow the call path yourself from that line to the viewer page or the
-         websocket URL, and decide whether the disagreement is real: does that
-         code actually run in the prefixed deployment, does it actually assume a
-         root prefix, would it actually break. Dead code, a path that never
-         reaches the viewer, or an assumption the code does not in fact make is
-         "rejected". A finding that is real but for a different reason than
-         stated is "confirmed"; correct its summary.
-      3. Record the exact evidence you read: the file and line you verified at,
-         and the actual content of that line copied verbatim from the file.
-      Keep the reviewer's id, and keep every finding - reject, never drop. If
-      the reviewer's file or line does not exist, the verdict is "rejected" and
-      the evidence says so.
-
-      OUTPUT
-      Write to {{artifact}} and write nothing else to that file. The file must
-      contain VALID JSON and nothing else: no prose, no markdown fence, no
-      comment. It is a JSON array with one element per reviewer finding, in the
-      reviewer's order, each an object with exactly these keys:
-        "id"                 - string, the reviewer's id, unchanged
-        "file"               - string, repository-relative path
-        "line"               - integer
-        "severity"           - string, one of "high", "medium", "low"; correct
-                               the reviewer's if your reading disagrees
-        "summary"            - string, one sentence; corrected if needed
-        "verdict"            - string, "confirmed" or "rejected"
-        "verified_evidence"  - string, "<file>:<line>: <the actual content of
-                               that line, copied from the file>", plus one
-                               sentence saying what that line proves
-      If the reviewer's array was empty, write exactly [] to that file. Ask no
-      questions. Stop as soon as the file is written.
-    artifact: verify-callpaths.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
-
-  - name: verify-tests
-    needs: [lens-tests]
-    prompt: |
-      A reviewer produced findings about the test coverage of pull request
-      glim-sh/cuttle #62 ("fix(viewer): keep websocket inside proxy prefix").
-      Reviewer findings are frequently wrong. Your job is to re-derive every one
-      of them from the actual code and rule on it. Believe a finding for what it
-      points at, never because the reviewer asserted it.
-
-      MATERIALS
-      - The reviewer's findings, a JSON array: {{artifact:lens-tests}}
+      - The findings, a JSON array: {{artifact:lens-correctness}}
       - The unified diff of the pull request: {{input:diff}}
       - The repository, checked out at the pull request's head commit
         8fd8af8f96ca8f5cba5975c9228f2cb5e252c6e3:
@@ -336,49 +256,189 @@ nodes:
         READ ONLY. Never write, create, delete, move, rename, stage, commit,
         checkout or otherwise modify anything under that directory, and never
         run a command that would. Read files and search them; that is all. Do
-        not run the test suite; read it.
+        not run the test suite and do not build the project; read the code.
 
       METHOD
+      Each finding is a claim to be tested against the code, not a conclusion to
+      endorse and not one to attack. Its wording, its quoted evidence and its
+      severity are all unverified; the file is the only authority.
       For each finding, in order:
-      1. Open the file it names in the checkout and read the test or workflow
-         code around the line it names. The reviewer's quoted evidence may be
-         paraphrased, mislocated or invented - the file is the authority.
-      2. Decide whether the claim holds by tracing the assertion: for a claimed
-         coverage gap, search the repository for any assertion that would fail
-         under the change the reviewer says is untested - if one exists, the
-         finding is "rejected". For a claimed weak or misleading test, read what
-         the harness actually does on that path and decide whether it can pass
-         while the behaviour is broken. For a claimed stale test, read what it
-         asserts now. A finding that is real but for a different reason than
-         stated is "confirmed"; correct its summary.
-      3. Record the exact evidence you read: the file and line you verified at,
-         and the actual content of that line copied verbatim from the file.
-      Keep the reviewer's id, and keep every finding - reject, never drop. If
-      the reviewer's file or line does not exist, the verdict is "rejected" and
-      the evidence says so.
+      1. Open the file it names and read the code around the line it names.
+         Read enough of what surrounds it, and of what calls it or it calls, to
+         settle the question on your own evidence.
+      2. Decide whether the defect the summary describes is actually present in
+         that code. Reason concretely: what input reaches that code, what it
+         produces, what its caller does with the result, what the deployment
+         does with that. A claim you can neither reproduce nor derive from the
+         code is "rejected", however plausible it reads. A defect that is really
+         there but for a different reason than the summary gives is "confirmed",
+         with the summary corrected to the reason you established. A file or
+         line that does not exist is "rejected", and the evidence says so.
+      3. Record the evidence you read: the file and line you verified at, and
+         the actual content of that line copied verbatim from the file.
+      Keep every finding and keep its id - reject, never drop. Neither verdict
+      is the expected one: a set in which every finding is confirmed and a set
+      in which every finding is rejected are equally possible outcomes.
 
       OUTPUT
       Write to {{artifact}} and write nothing else to that file. The file must
       contain VALID JSON and nothing else: no prose, no markdown fence, no
-      comment. It is a JSON array with one element per reviewer finding, in the
-      reviewer's order, each an object with exactly these keys:
-        "id"                 - string, the reviewer's id, unchanged
+      comment. It is a JSON array with one element per finding you were given,
+      in the order you were given them, each an object with exactly these keys:
+        "id"                 - string, the finding's id, unchanged
         "file"               - string, repository-relative path
         "line"               - integer
         "severity"           - string, one of "high", "medium", "low"; correct
-                               the reviewer's if your reading disagrees
+                               the one you were given if your reading disagrees
         "summary"            - string, one sentence; corrected if needed
         "verdict"            - string, "confirmed" or "rejected"
         "verified_evidence"  - string, "<file>:<line>: <the actual content of
                                that line, copied from the file>", plus one
                                sentence saying what that line proves
-      If the reviewer's array was empty, write exactly [] to that file. Ask no
-      questions. Stop as soon as the file is written.
+      If the array you were given was empty, write exactly [] to that file. Ask
+      no questions. Stop as soon as the file is written.
+    artifact: verify-correctness.json
+    check: &check-verdicts ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
+
+  - name: verify-callpaths
+    needs: [lens-callpaths]
+    agent: acpx:codex
+    model: gpt-5.6-sol
+    timeout_seconds: 900
+    prompt: |
+      You are given a set of findings about one pull request and the code they
+      are about. Nothing is said about who produced them, what they were looking
+      for, or how many of them are real. Rule on each one yourself.
+
+      PULL REQUEST
+      glim-sh/cuttle #62, "fix(viewer): keep websocket inside proxy prefix"
+      (+388/-7, 4 files).
+
+      MATERIALS
+      - The findings, a JSON array: {{artifact:lens-callpaths}}
+      - The unified diff of the pull request: {{input:diff}}
+      - The repository, checked out at the pull request's head commit
+        8fd8af8f96ca8f5cba5975c9228f2cb5e252c6e3:
+        /home/tenequm/pjv/glim-sh/cuttle
+        READ ONLY. Never write, create, delete, move, rename, stage, commit,
+        checkout or otherwise modify anything under that directory, and never
+        run a command that would. Read files and search them; that is all. Do
+        not run the test suite and do not build the project; read the code.
+
+      METHOD
+      Each finding is a claim to be tested against the code, not a conclusion to
+      endorse and not one to attack. Its wording, its quoted evidence and its
+      severity are all unverified; the file is the only authority.
+      For each finding, in order:
+      1. Open the file it names and read the code around the line it names.
+         Read enough of what surrounds it, and of what calls it or it calls, to
+         settle the question on your own evidence.
+      2. Decide whether the defect the summary describes is actually present in
+         that code. Reason concretely: what input reaches that code, what it
+         produces, what its caller does with the result, what the deployment
+         does with that. A claim you can neither reproduce nor derive from the
+         code is "rejected", however plausible it reads. A defect that is really
+         there but for a different reason than the summary gives is "confirmed",
+         with the summary corrected to the reason you established. A file or
+         line that does not exist is "rejected", and the evidence says so.
+      3. Record the evidence you read: the file and line you verified at, and
+         the actual content of that line copied verbatim from the file.
+      Keep every finding and keep its id - reject, never drop. Neither verdict
+      is the expected one: a set in which every finding is confirmed and a set
+      in which every finding is rejected are equally possible outcomes.
+
+      OUTPUT
+      Write to {{artifact}} and write nothing else to that file. The file must
+      contain VALID JSON and nothing else: no prose, no markdown fence, no
+      comment. It is a JSON array with one element per finding you were given,
+      in the order you were given them, each an object with exactly these keys:
+        "id"                 - string, the finding's id, unchanged
+        "file"               - string, repository-relative path
+        "line"               - integer
+        "severity"           - string, one of "high", "medium", "low"; correct
+                               the one you were given if your reading disagrees
+        "summary"            - string, one sentence; corrected if needed
+        "verdict"            - string, "confirmed" or "rejected"
+        "verified_evidence"  - string, "<file>:<line>: <the actual content of
+                               that line, copied from the file>", plus one
+                               sentence saying what that line proves
+      If the array you were given was empty, write exactly [] to that file. Ask
+      no questions. Stop as soon as the file is written.
+    artifact: verify-callpaths.json
+    check: *check-verdicts
+
+  - name: verify-tests
+    needs: [lens-tests]
+    agent: acpx:codex
+    model: gpt-5.6-sol
+    timeout_seconds: 900
+    prompt: |
+      You are given a set of findings about one pull request and the code they
+      are about. Nothing is said about who produced them, what they were looking
+      for, or how many of them are real. Rule on each one yourself.
+
+      PULL REQUEST
+      glim-sh/cuttle #62, "fix(viewer): keep websocket inside proxy prefix"
+      (+388/-7, 4 files).
+
+      MATERIALS
+      - The findings, a JSON array: {{artifact:lens-tests}}
+      - The unified diff of the pull request: {{input:diff}}
+      - The repository, checked out at the pull request's head commit
+        8fd8af8f96ca8f5cba5975c9228f2cb5e252c6e3:
+        /home/tenequm/pjv/glim-sh/cuttle
+        READ ONLY. Never write, create, delete, move, rename, stage, commit,
+        checkout or otherwise modify anything under that directory, and never
+        run a command that would. Read files and search them; that is all. Do
+        not run the test suite and do not build the project; read the code.
+
+      METHOD
+      Each finding is a claim to be tested against the code, not a conclusion to
+      endorse and not one to attack. Its wording, its quoted evidence and its
+      severity are all unverified; the file is the only authority.
+      For each finding, in order:
+      1. Open the file it names and read the code around the line it names.
+         Read enough of what surrounds it, and of what calls it or it calls, to
+         settle the question on your own evidence.
+      2. Decide whether the defect the summary describes is actually present in
+         that code. Reason concretely: what input reaches that code, what it
+         produces, what its caller does with the result, what the deployment
+         does with that. For a claim that something is not covered, search for
+         anything that would in fact catch it before ruling. A claim you can
+         neither reproduce nor derive from the code is "rejected", however
+         plausible it reads. A defect that is really there but for a different
+         reason than the summary gives is "confirmed", with the summary
+         corrected to the reason you established. A file or line that does not
+         exist is "rejected", and the evidence says so.
+      3. Record the evidence you read: the file and line you verified at, and
+         the actual content of that line copied verbatim from the file.
+      Keep every finding and keep its id - reject, never drop. Neither verdict
+      is the expected one: a set in which every finding is confirmed and a set
+      in which every finding is rejected are equally possible outcomes.
+
+      OUTPUT
+      Write to {{artifact}} and write nothing else to that file. The file must
+      contain VALID JSON and nothing else: no prose, no markdown fence, no
+      comment. It is a JSON array with one element per finding you were given,
+      in the order you were given them, each an object with exactly these keys:
+        "id"                 - string, the finding's id, unchanged
+        "file"               - string, repository-relative path
+        "line"               - integer
+        "severity"           - string, one of "high", "medium", "low"; correct
+                               the one you were given if your reading disagrees
+        "summary"            - string, one sentence; corrected if needed
+        "verdict"            - string, "confirmed" or "rejected"
+        "verified_evidence"  - string, "<file>:<line>: <the actual content of
+                               that line, copied from the file>", plus one
+                               sentence saying what that line proves
+      If the array you were given was empty, write exactly [] to that file. Ask
+      no questions. Stop as soon as the file is written.
     artifact: verify-tests.json
-    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
+    check: *check-verdicts
 
   - name: reconcile
     needs: [verify-correctness, verify-callpaths, verify-tests]
+    model: gemini-3.7-flash-medium
     timeout_seconds: 300
     prompt: |
       Three verified finding sets about pull request glim-sh/cuttle #62
@@ -427,3 +487,25 @@ nodes:
       questions. Stop as soon as the file is written.
     artifact: ledger.json
     check: ["jq", "-e", "type == \"array\" and all(.[]; (.disposition == \"confirmed\" or .disposition == \"rejected\" or .disposition == \"duplicate\") and (.disposition != \"duplicate\" or has(\"duplicate_of\")) and has(\"id\"))", "{{artifact}}"]
+
+  # Shadow twins. Same lens prompt, free qwen lane, nothing depends on them.
+  - name: shadow-lens-correctness
+    agent: acpx:pi
+    model: litellm/qwen3.8-flash-next
+    prompt: *prompt-correctness
+    artifact: shadow-lens-correctness.json
+    check: *check-findings
+
+  - name: shadow-lens-callpaths
+    agent: acpx:pi
+    model: litellm/qwen3.8-flash-next
+    prompt: *prompt-callpaths
+    artifact: shadow-lens-callpaths.json
+    check: *check-findings
+
+  - name: shadow-lens-tests
+    agent: acpx:pi
+    model: litellm/qwen3.8-flash-next
+    prompt: *prompt-tests
+    artifact: shadow-lens-tests.json
+    check: *check-findings

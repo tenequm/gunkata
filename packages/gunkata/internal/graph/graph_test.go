@@ -47,6 +47,7 @@ nodes:
     prompt: read {{artifact:produce}} into {{artifact}}
     artifact: consume.txt
     check: ["test", "-s", "{{artifact}}"]
+    agent: acpx:pi
     model: model-b
     timeout_seconds: 30
 `
@@ -337,6 +338,11 @@ func TestLoadResolvesDefaults(t *testing.T) {
 		t.Errorf("produce model = %q, want the default model-a", produce.Model)
 	}
 
+	if produce.Agent != "/bin/agent" {
+		t.Errorf("produce agent = %q, want the default /bin/agent",
+			produce.Agent)
+	}
+
 	if produce.TimeoutSeconds != setTimeout {
 		t.Errorf("produce timeout = %d, want %d",
 			produce.TimeoutSeconds, setTimeout)
@@ -345,6 +351,10 @@ func TestLoadResolvesDefaults(t *testing.T) {
 	consume := g.Node(nodeConsume)
 	if consume.Model != "model-b" {
 		t.Errorf("consume model = %q, want its own model-b", consume.Model)
+	}
+
+	if consume.Agent != "acpx:pi" {
+		t.Errorf("consume agent = %q, want its own acpx:pi", consume.Agent)
 	}
 
 	if consume.TimeoutSeconds != ownTimeout {
