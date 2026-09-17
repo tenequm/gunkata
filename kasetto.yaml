@@ -1,0 +1,18 @@
+# Kasetto - https://github.com/pivoshenko/kasetto
+#
+# Project-scoped skills. Install with `kst sync`; the install directories
+# (.claude/skills, .agents/skills) are gitignored, only this file and
+# kasetto.lock are tracked.
+
+scope: project
+
+agent:
+  - claude-code
+  - codex
+
+skills:
+  - source: https://github.com/tenequm/skills
+    skills:
+      - go-dev
+      - okf-project-knowledge-base
+      - acpx-faq

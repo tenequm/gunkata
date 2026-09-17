@@ -1,0 +1,29 @@
+# Build output
+/gunkata
+/dist/
+
+# Test and coverage output
+coverage.out
+coverage.html
+*.test
+*.out
+.golangci-cache/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# kasetto install directories (managed by `kst sync`)
+/.claude/skills/
+/.agents/skills/
+
+# Local tool overrides
+lefthook-local.yml
+.direnv/
+result
+result-*
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

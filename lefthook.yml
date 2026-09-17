@@ -1,0 +1,27 @@
+assert_lefthook_installed: true
+
+pre-commit:
+  piped: true
+  commands:
+    fmt:
+      glob: "*.go"
+      run: golangci-lint fmt {staged_files}
+      stage_fixed: true
+    lint:
+      glob: "*.go"
+      # Never pass a bare file list to `golangci-lint run`: a list spanning two
+      # directories is rejected outright, and one file of a multi-file package
+      # reports phantom `undefined:` typecheck errors. Lint the packages instead.
+      run: printf '%s\n' {staged_files} | xargs -n1 dirname | sort -u | xargs golangci-lint run --fix
+      stage_fixed: true
+    mod-tidy:
+      glob: "*.{go,mod,sum}"
+      run: go mod tidy
+    kb-index:
+      glob: "docs/knowledge/**/*.md"
+      run: python3 scripts/kb_index.py --check
+
+pre-push:
+  commands:
+    test:
+      run: go test -race ./...

@@ -1,0 +1,27 @@
+version: 3
+skills:
+  https://github.com/tenequm/skills::acpx-faq:
+    destination: .claude/skills/acpx-faq,.agents/skills/acpx-faq
+    hash: e412611ad950ee6de4e7b6a685eb8c22f21a961ee36b85c167334c14eb542abc
+    skill: acpx-faq
+    description: Run coding agents (codex, claude, agy/Antigravity) through the acpx ACP CLI - the headless lane outside a herdr pane (no HERDR_ENV). Use before launching or prompting a subagent, and when a command fails, a session is not found, or a prompt is lost.
+    source: https://github.com/tenequm/skills
+    source_revision: branch:main
+    scope: project
+  https://github.com/tenequm/skills::go-dev:
+    destination: .claude/skills/go-dev,.agents/skills/go-dev
+    hash: e3749af0aac7ea992da90ae1a024c16ef6bdb0ebb50b705587c86ae228954a84
+    skill: go-dev
+    description: Opinionated Go setup with golangci-lint v2, gofumpt, gotestsum, golang-migrate, and just. Use when starting a Go project, configuring lint, format, test, coverage or CI, writing a Justfile, wiring migrations, or leaving a Makefile workflow.
+    source: https://github.com/tenequm/skills
+    source_revision: branch:main
+    scope: project
+  https://github.com/tenequm/skills::okf-project-knowledge-base:
+    destination: .claude/skills/okf-project-knowledge-base,.agents/skills/okf-project-knowledge-base
+    hash: a354f82b159993b2448a680adcaf04a1305e8b8411d348f5a4e1deab2f5d922c
+    skill: okf-project-knowledge-base
+    description: Durable project knowledge as Git-native OKF bundles (docs/knowledge/, one concept per file, with provenance and trust tiers). Use to record a decision, finding, or rule that must outlive the session. Not session state or agent instructions.
+    source: https://github.com/tenequm/skills
+    source_revision: branch:main
+    scope: project
+assets: {}
