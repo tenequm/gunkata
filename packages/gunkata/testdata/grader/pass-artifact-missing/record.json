@@ -1,0 +1,36 @@
+{
+  "run_id": "starter-pass-0002",
+  "graph": "starter.yaml",
+  "outcome": "succeeded",
+  "started_at": "2026-09-17T10:00:00Z",
+  "finished_at": "2026-09-17T10:01:30Z",
+  "nodes": {
+    "produce": {
+      "state": "done",
+      "attempts": 1,
+      "started_at": "2026-09-17T10:00:00Z",
+      "finished_at": "2026-09-17T10:00:40Z",
+      "executor_exit": 0,
+      "gate_exit": null,
+      "artifact": "artifacts/produce.txt"
+    },
+    "gate": {
+      "state": "done",
+      "attempts": 1,
+      "started_at": "2026-09-17T10:00:40Z",
+      "finished_at": "2026-09-17T10:00:41Z",
+      "executor_exit": null,
+      "gate_exit": 0,
+      "artifact": null
+    },
+    "consume": {
+      "state": "done",
+      "attempts": 1,
+      "started_at": "2026-09-17T10:00:41Z",
+      "finished_at": "2026-09-17T10:01:30Z",
+      "executor_exit": 0,
+      "gate_exit": 0,
+      "artifact": "artifacts/consume.txt"
+    }
+  }
+}

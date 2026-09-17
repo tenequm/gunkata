@@ -1,9 +1,9 @@
 # Build output
-/gunkata
+/packages/gunkata/gunkata
 /dist/
 
 # Test and coverage output
-coverage.out
+/packages/gunkata/coverage.out
 coverage.html
 *.test
 *.out

@@ -1,13 +1,20 @@
 assert_lefthook_installed: true
 
+# This file stays at the repo root: lefthook only reads the config next to
+# .git, so moving it alongside the Go module would silently disable the hooks.
+# The Go jobs declare `root: packages/gunkata/` so the Go toolchain runs inside
+# the module; the knowledge-index job stays rooted at the repo root.
+
 pre-commit:
   piped: true
   commands:
     fmt:
+      root: "packages/gunkata/"
       glob: "*.go"
       run: golangci-lint fmt {staged_files}
       stage_fixed: true
     lint:
+      root: "packages/gunkata/"
       glob: "*.go"
       # Never pass a bare file list to `golangci-lint run`: a list spanning two
       # directories is rejected outright, and one file of a multi-file package
@@ -15,6 +22,7 @@ pre-commit:
       run: printf '%s\n' {staged_files} | xargs -n1 dirname | sort -u | xargs golangci-lint run --fix
       stage_fixed: true
     mod-tidy:
+      root: "packages/gunkata/"
       glob: "*.{go,mod,sum}"
       run: go mod tidy
     kb-index:
@@ -24,4 +32,5 @@ pre-commit:
 pre-push:
   commands:
     test:
+      root: "packages/gunkata/"
       run: go test -race ./...

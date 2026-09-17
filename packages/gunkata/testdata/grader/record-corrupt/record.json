@@ -1,0 +1,6 @@
+{
+  "run_id": "starter-pass-0007",
+  "graph": "starter.yaml",
+  "outcome": "succeeded",
+  "nodes": {
+    "produce": {

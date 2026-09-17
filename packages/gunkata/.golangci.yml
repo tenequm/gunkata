@@ -74,6 +74,12 @@ linters:
           - dupl
           - gosec
           - wrapcheck
+          # Table-driven tests label their cases with short literals such as
+          # "once" or "never"; revive's add-constant and goconst both demand
+          # named constants for them, which buries the table they are meant to
+          # keep readable. Production code stays under both linters.
+          - revive
+          - goconst
 
 formatters:
   enable:

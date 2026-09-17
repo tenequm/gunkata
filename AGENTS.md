@@ -63,6 +63,10 @@ lock there first, then here.
 - `docs/2609-17-review-pr-requirements.md` - what a pull request review must achieve.
 - `docs/2609-17-build-pipeline-requirements.md` - what the build pipeline must achieve.
 - `docs/2609-17-starter-corpus-case.md` - the single starter case of lock 7.
+- `examples/` - the graded corpus, doubling as the usage examples. Everything in it is
+  graded, so lock 7's growth rule governs the directory.
+- `packages/gunkata/` - the Go engine (module `github.com/tenequm/gunkata`). All Go tooling
+  runs from there; the `just` recipes and the lefthook Go jobs already do.
 
 The two requirement docs are goals, not designs, and carry no tool names on purpose. Keep
 them that way.

@@ -1,0 +1,36 @@
+{
+  "run_id": "starter-fail-0003",
+  "graph": "starter.yaml",
+  "outcome": "parked",
+  "started_at": "2026-09-17T10:00:00Z",
+  "finished_at": "2026-09-17T10:00:41Z",
+  "nodes": {
+    "produce": {
+      "state": "done",
+      "attempts": 1,
+      "started_at": "2026-09-17T10:00:00Z",
+      "finished_at": "2026-09-17T10:00:40Z",
+      "executor_exit": 0,
+      "gate_exit": null,
+      "artifact": "artifacts/produce.txt"
+    },
+    "gate": {
+      "state": "parked",
+      "attempts": 2,
+      "started_at": "2026-09-17T10:00:40Z",
+      "finished_at": "2026-09-17T10:00:41Z",
+      "executor_exit": null,
+      "gate_exit": 1,
+      "artifact": null
+    },
+    "consume": {
+      "state": "pending",
+      "attempts": 0,
+      "started_at": null,
+      "finished_at": null,
+      "executor_exit": null,
+      "gate_exit": null,
+      "artifact": "artifacts/consume.txt"
+    }
+  }
+}

@@ -5,6 +5,10 @@ before anything else is built. This is that case. It is synthetic on purpose: it
 the engine, not a model. It is the only case the corpus is allowed to contain until a real
 case forces a second one.
 
+The corpus lives at `examples/starter/`, and everything under `examples/` is graded corpus -
+the graphs double as the usage examples. Lock 7's growth rule therefore governs the whole
+directory: no ungraded illustrative file belongs in it.
+
 ## What it proves
 
 That the engine can schedule a graph, run an executor in isolation, verify completion from
