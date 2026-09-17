@@ -67,6 +67,19 @@ lock there first, then here.
 The two requirement docs are goals, not designs, and carry no tool names on purpose. Keep
 them that way.
 
+## Build discipline (MVP)
+
+YAGNI and KISS govern every change while the MVP is being built.
+
+- Build only what the current milestone needs. No speculative features, options, config
+  knobs, interfaces, plugin points or abstraction layers "for later" - later earns them
+  when a real case demands them (the same growth rule lock 7 applies to the corpus).
+- Prefer the simplest working construction: stdlib over a dependency, a function over an
+  interface, one package over three, a literal over a generic. Reach for the complex form
+  only when the simple one demonstrably cannot carry the requirement.
+- Every new file, dependency and exported symbol must justify its existence. If it can be
+  inlined, inline it.
+
 ## Working in this repo
 
 `just check` is the full gate (format, lint config, lint, test, knowledge index).
