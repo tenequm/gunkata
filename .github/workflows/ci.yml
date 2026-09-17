@@ -8,63 +8,12 @@ on:
 permissions:
   contents: read
 
+# One job running the same command as the pre-push hook, so CI cannot drift from
+# local. The flake pins the toolchain; `check-ci` owns what is checked.
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: packages/gunkata/go.mod
-          cache-dependency-path: packages/gunkata/go.mod
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13
-          working-directory: packages/gunkata
-      - name: Verify lint config against the pinned binary
-        working-directory: packages/gunkata
-        run: golangci-lint config verify
-      - name: Verify formatting
-        working-directory: packages/gunkata
-        run: golangci-lint fmt --diff ./...
-      - name: Verify the knowledge index is current
-        run: python3 scripts/kb_index.py --check
-
-  test:
-    runs-on: ubuntu-latest
-    needs: lint
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: packages/gunkata/go.mod
-          cache-dependency-path: packages/gunkata/go.mod
-      - run: go install gotest.tools/gotestsum@v1.13.0
-      - name: Test
-        working-directory: packages/gunkata
-        run: gotestsum --format github-actions --junitfile unit-tests.xml -- -race -coverprofile=coverage.out -covermode=atomic ./...
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: test-results
-          path: packages/gunkata/unit-tests.xml
-
-  security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: packages/gunkata/go.mod
-          cache-dependency-path: packages/gunkata/go.mod
-      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-      - name: Vulnerability check
-        working-directory: packages/gunkata
-        run: govulncheck ./...
-
-  nix:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
-      - run: nix flake check --print-build-logs
+      - run: nix develop -c just check-ci
