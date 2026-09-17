@@ -65,9 +65,25 @@ fmt-lint-staged:
     # reports phantom `undefined:` typecheck errors. Lint the packages instead.
     mapfile -t pkgs < <(printf '%s\n' "${files[@]}" | xargs -n1 dirname | sort -u)
     echo "fmt-lint-staged: ${pkgs[*]}"
+    # `golangci-lint run --fix` is package-scoped, so it can rewrite a file that
+    # shares a package with a staged one but is not staged itself. lefthook's
+    # stage_fixed re-stages only the set it was handed, so such a fix would sit
+    # unstaged while the commit went through without it. Compare the unstaged
+    # set across the fixers and refuse to pass silently.
+    before="$(git diff --name-only | sort -u)"
     cd packages/gunkata
     golangci-lint fmt "${files[@]}"
     golangci-lint run --fix "${pkgs[@]}"
+    cd - >/dev/null
+    staged="$(printf 'packages/gunkata/%s\n' "${files[@]}" | sort -u)"
+    stray="$(comm -13 <(printf '%s\n' "$before") <(git diff --name-only | sort -u) \
+        | comm -23 - <(printf '%s\n' "$staged"))"
+    if [[ -n "$stray" ]]; then
+        echo "fmt-lint-staged: the fixer rewrote files that are not staged:" >&2
+        printf '%s\n' "$stray" | sed 's/^/  /' >&2
+        echo "fmt-lint-staged: review and 'git add' them, then commit again" >&2
+        exit 1
+    fi
 
 # Run vulnerability check
 [group('quality')]

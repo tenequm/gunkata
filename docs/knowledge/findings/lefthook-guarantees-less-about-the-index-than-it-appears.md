@@ -31,6 +31,12 @@ Go linter this is a real gap: `golangci-lint run --fix` may fix an unstaged file
 package, and that fix lands in the worktree while the commit proceeds without it. The `git add`
 is deferred and batched once at hook end, and since 2.1.12 a failed `git add` fails the hook.
 
+`fmt-lint-staged` closes this by comparing the unstaged set across the fixers and failing on any
+file the fixer wrote that is neither staged nor already dirty. The limit of that guard is that
+`git diff` does not report untracked files, so a fixer that *creates* a file still passes it.
+In practice the trigger is narrow, because it needs HEAD to already carry a fixable issue -
+which this gate now prevents from landing.
+
 **Only partially staged files are hidden.** The guard stashes a file only when it is dirty in
 *both* the index and the worktree. A file with unstaged changes that was never staged is not
 hidden, so a hook judges the on-disk file, not the indexed one - verified by editing the
