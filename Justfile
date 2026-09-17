@@ -41,11 +41,70 @@ lint-fix:
 lint-config:
     golangci-lint config verify
 
+# golangci-lint takes a global lock in the system temp dir and exits with
+# "parallel golangci-lint is running" rather than queueing, so `fmt` and `run`
+# are paired inside one recipe instead of being concurrent siblings of a gate;
+# with fixes on they would also write the same files.
+
+# Verify formatting, lint config and lint, whole repo (one golangci-lint at a time)
+[group('quality')]
+fmt-lint: fmt-check lint-config lint
+
+# Format and lint the staged Go packages, applying fixes
+[group('quality')]
+fmt-lint-staged:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mapfile -t files < <(just staged-go)
+    if [[ "${#files[@]}" -eq 0 ]]; then
+        echo "fmt-lint-staged: nothing staged"
+        exit 0
+    fi
+    # `golangci-lint run` cannot take a bare file list: a list spanning two
+    # directories is rejected outright, and one file of a multi-file package
+    # reports phantom `undefined:` typecheck errors. Lint the packages instead.
+    mapfile -t pkgs < <(printf '%s\n' "${files[@]}" | xargs -n1 dirname | sort -u)
+    echo "fmt-lint-staged: ${pkgs[*]}"
+    cd packages/gunkata
+    golangci-lint fmt "${files[@]}"
+    golangci-lint run --fix "${pkgs[@]}"
+
 # Run vulnerability check
 [group('quality')]
 [working-directory('packages/gunkata')]
 vuln:
     govulncheck ./...
+
+# Scan the working tree for secrets
+[group('quality')]
+secrets:
+    gitleaks dir . --redact=100 --no-banner
+
+# Scan the staged diff for secrets
+[group('quality')]
+secrets-staged:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "$(git diff --cached --name-only --diff-filter=ACMR)" ]]; then
+        echo "secrets-staged: nothing staged"
+        exit 0
+    fi
+    gitleaks git --pre-commit --staged --redact=100 --no-banner
+
+# Lint the GitHub Actions workflows (shellchecks every run: block)
+[group('quality')]
+actions:
+    actionlint .github/workflows/*.yml
+
+# Evaluate the flake and build its packages
+[group('quality')]
+flake:
+    nix flake check
+
+# Staged Go files, relative to the module dir the Go tools must run in
+[private]
+staged-go:
+    @git diff --cached --name-only --diff-filter=ACMR | grep '^packages/gunkata/.*\.go$' | sed 's|^packages/gunkata/||' || true
 
 # Testing
 
@@ -54,6 +113,19 @@ vuln:
 [working-directory('packages/gunkata')]
 test *args="./...":
     gotestsum --format testname -- -race {{ args }}
+
+# Run the tests of the staged Go packages (go test takes packages, not files)
+[group('test')]
+test-staged:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mapfile -t files < <(just staged-go)
+    if [[ "${#files[@]}" -eq 0 ]]; then
+        echo "test-staged: nothing staged"
+        exit 0
+    fi
+    mapfile -t pkgs < <(printf '%s\n' "${files[@]}" | xargs -n1 dirname | sort -u | sed 's|^|./|')
+    just test "${pkgs[@]}"
 
 # Run tests with coverage
 [group('test')]
@@ -121,6 +193,13 @@ tidy:
     go mod tidy
     go mod verify
 
+# Fail if go.mod or go.sum is untidy, without rewriting them
+[group('deps')]
+[working-directory('packages/gunkata')]
+tidy-check:
+    go mod tidy -diff
+    go mod verify
+
 # Run code generators
 [group('deps')]
 [working-directory('packages/gunkata')]
@@ -139,12 +218,24 @@ kb-index:
 kb-check:
     python3 scripts/kb_index.py --check
 
-# CI
+# Gates
 
-# Full gate (format check + lint config + lint + test + knowledge index)
+# Both verbs run their gates concurrently. `check` is staged-only and applies
+# fixes; `check-ci` is whole-repo and mutates nothing, so the pre-push hook and
+# CI run the identical command and cannot drift. `corpus` is in neither: it
+# spends real model quota.
+
+# Fast staged-only gate, applies fixes (pre-commit)
 [group('ci')]
-check: fmt-check lint-config lint test kb-check
-    @echo "All checks passed"
+[parallel]
+check: fmt-lint-staged test-staged tidy secrets-staged kb-index
+    @echo "check: passed"
+
+# Full verify-only gate, mutates nothing (pre-push and CI)
+[group('ci')]
+[parallel]
+check-ci: fmt-lint test tidy-check secrets vuln actions flake kb-check
+    @echo "check-ci: passed"
 
 # Clean build artifacts
 [group('ci')]

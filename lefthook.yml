@@ -2,35 +2,18 @@ assert_lefthook_installed: true
 
 # This file stays at the repo root: lefthook only reads the config next to
 # .git, so moving it alongside the Go module would silently disable the hooks.
-# The Go jobs declare `root: packages/gunkata/` so the Go toolchain runs inside
-# the module; the knowledge-index job stays rooted at the repo root.
+# Each hook runs one `just` verb and nothing else. The recipes resolve their own
+# staged files and their own working directories, so no `root`, `glob` or
+# `{staged_files}` plumbing belongs here - and `just check` stays runnable by
+# hand, outside any hook.
 
 pre-commit:
-  piped: true
   commands:
-    fmt:
-      root: "packages/gunkata/"
-      glob: "*.go"
-      run: golangci-lint fmt {staged_files}
+    check:
+      run: just check
       stage_fixed: true
-    lint:
-      root: "packages/gunkata/"
-      glob: "*.go"
-      # Never pass a bare file list to `golangci-lint run`: a list spanning two
-      # directories is rejected outright, and one file of a multi-file package
-      # reports phantom `undefined:` typecheck errors. Lint the packages instead.
-      run: printf '%s\n' {staged_files} | xargs -n1 dirname | sort -u | xargs golangci-lint run --fix
-      stage_fixed: true
-    mod-tidy:
-      root: "packages/gunkata/"
-      glob: "*.{go,mod,sum}"
-      run: go mod tidy
-    kb-index:
-      glob: "docs/knowledge/**/*.md"
-      run: python3 scripts/kb_index.py --check
 
 pre-push:
   commands:
-    test:
-      root: "packages/gunkata/"
-      run: go test -race ./...
+    check-ci:
+      run: just check-ci
