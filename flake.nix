@@ -79,6 +79,8 @@
           name = "gunkata";
 
           packages = [
+            pkgs.actionlint
+            pkgs.gitleaks
             pkgs.go_1_27
             pkgs.golangci-lint
             pkgs.gotestsum
@@ -109,6 +111,8 @@
             echo "flake-pinned:"
             printf '  %-8s %s\n' go "$(go version | cut -d' ' -f3)"
             printf '  %-8s %s\n' pond "$(pond --version 2>/dev/null | head -n1)"
+            printf '  %-8s %s\n' gitleaks "$(gitleaks version 2>/dev/null | head -n1)"
+            printf '  %-8s %s\n' actionlint "$(actionlint --version 2>/dev/null | head -n1)"
             echo "host-provided:"
             gunkata_check acpx 0.15.0
             gunkata_check claude ""
