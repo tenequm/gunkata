@@ -5,8 +5,9 @@ isolated, bare executor, and a dependent is released only when the upstream step
 evidence artifact exists and passes its check. Generic and unopinionated out of the box:
 no built-in roles, no built-in prompts.
 
-**Status: milestone 1.** The engine, the model-free grader and the starter corpus case
-are built; the live graded run is the milestone's exit gate.
+**Status: milestone 1 passed.** The engine, the model-free grader and the starter corpus
+case are built, and the live graded run passes both variants - the pass graph completes and
+the fail graph parks at its gate without releasing dependents.
 
 - [AGENTS.md](AGENTS.md) - design intent, the executor contract, and the seven locks.
 - [docs/](docs/) - requirement documents and the starter corpus case.
