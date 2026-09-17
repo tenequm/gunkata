@@ -40,6 +40,7 @@ const (
 	xdgStateDir  = ".local/state"
 	xdgCacheDir  = ".cache"
 	authDir      = ".gemini/antigravity-acp"
+	serverDir    = ".local/lib/antigravity-acp"
 )
 
 // inherited is the whitelist that crosses the executor boundary. Skills,
@@ -238,7 +239,14 @@ func linkAuth(home string) error {
 		}
 	}
 
-	return nil
+	// The agy wrapper resolves its .par through $HOME, so the server
+	// binaries ride the same explicit inheritance as the credentials.
+	libDir := filepath.Dir(filepath.Join(home, serverDir))
+	if err := os.MkdirAll(libDir, dirPerm); err != nil {
+		return fmt.Errorf("create server dir: %w", err)
+	}
+
+	return link(filepath.Join(realHome, serverDir), filepath.Join(home, serverDir))
 }
 
 // link points dst at src, skipping credentials the host does not have.
