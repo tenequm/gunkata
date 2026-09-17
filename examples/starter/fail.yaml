@@ -4,7 +4,7 @@
 name: starter-fail
 
 defaults:
-  agent: /home/tenequm/.local/bin/agy-acp-server
+  agent: agy-acp-server
   model: gemini-3.7-flash-low
   timeout_seconds: 240
 
