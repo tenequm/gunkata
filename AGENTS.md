@@ -86,6 +86,17 @@ YAGNI and KISS govern every change while the MVP is being built.
 
 ## Working in this repo
 
-`just check` is the full gate (format, lint config, lint, test, knowledge index).
+There are exactly two gate verbs, and nothing else needs to be guessed at:
+
+- `just check` - staged-only, applies fixes, runs its gates in parallel. This is the
+  pre-commit hook. Each staged recipe prints "nothing staged" and exits 0 when the staged
+  set is empty, so a green run is never mistaken for a clean repo.
+- `just check-ci` - whole repo, verify-only, mutates nothing. This is the pre-push hook
+  *and* the single CI job, which run the identical command and therefore cannot drift.
+
+Run both from a shell that has the pinned toolchain, or prefix with `nix develop -c`: a gate
+inherits the caller's environment, and one cached before a `flake.nix` change fails with a
+bare exit 127. `just corpus` is in neither gate - it spends real model quota.
+
 `nix develop` provides the pinned toolchain plus pond; acpx and the executor CLIs are
 host-provided and the shell reports their versions on entry.

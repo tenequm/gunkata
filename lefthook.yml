@@ -1,3 +1,8 @@
+# `assert_lefthook_installed` is baked into the generated .git/hooks/* scripts
+# at `lefthook install` time and never read at run time, so changing it here
+# does nothing until the hooks are reinstalled. Those same generated scripts
+# exit 0 on `LEFTHOOK=0`, which is why CI calls `just check-ci` directly and
+# never reaches a gate through lefthook.
 assert_lefthook_installed: true
 
 # This file stays at the repo root: lefthook only reads the config next to
@@ -6,14 +11,21 @@ assert_lefthook_installed: true
 # staged files and their own working directories, so no `root`, `glob` or
 # `{staged_files}` plumbing belongs here - and `just check` stays runnable by
 # hand, outside any hook.
+#
+# `jobs` is a list and runs in written order. `commands` is a map that lefthook
+# sorts by priority, then numeric name prefix, then alphabetically, so a
+# commands block never runs in the order it is written.
 
 pre-commit:
-  commands:
-    check:
+  jobs:
+    - name: check
       run: just check
       stage_fixed: true
 
 pre-push:
-  commands:
-    check-ci:
-      run: just check-ci
+  jobs:
+    # `nix develop -c` so the gate cannot be decided by whichever shell invoked
+    # git: an env cached before a flake.nix change fails this gate with a bare
+    # exit 127. It costs ~2.3s and makes the hook byte-identical to the CI step.
+    - name: check-ci
+      run: nix develop -c just check-ci

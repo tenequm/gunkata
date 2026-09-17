@@ -225,16 +225,33 @@ kb-check:
 # CI run the identical command and cannot drift. `corpus` is in neither: it
 # spends real model quota.
 
+# Report any gate tool missing from the shell
+[group('ci')]
+tools:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    missing=()
+    for tool in actionlint gitleaks go golangci-lint gotestsum govulncheck nix python3; do
+        command -v "$tool" >/dev/null || missing+=("$tool")
+    done
+    if [[ "${#missing[@]}" -gt 0 ]]; then
+        echo "tools: not on PATH: ${missing[*]}" >&2
+        # A gate run from a shell whose dev env predates a flake.nix change
+        # fails with a bare exit 127; this says what to do about it.
+        echo "tools: dev shell stale or absent - run 'direnv reload', or prefix with 'nix develop -c'" >&2
+        exit 1
+    fi
+
 # Fast staged-only gate, applies fixes (pre-commit)
 [group('ci')]
 [parallel]
-check: fmt-lint-staged test-staged tidy secrets-staged kb-index
+check: tools fmt-lint-staged test-staged tidy secrets-staged kb-index
     @echo "check: passed"
 
 # Full verify-only gate, mutates nothing (pre-push and CI)
 [group('ci')]
 [parallel]
-check-ci: fmt-lint test tidy-check secrets vuln actions flake kb-check
+check-ci: tools fmt-lint test tidy-check secrets vuln actions flake kb-check
     @echo "check-ci: passed"
 
 # Clean build artifacts
