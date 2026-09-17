@@ -218,7 +218,7 @@ func (s *scheduler) runPrompt(
 	artifacts, inputs := s.layout.artifacts(), s.layout.inputs()
 
 	code, err := runExecutor(ctx, execSpec{
-		agent:   s.graph.Defaults.Agent,
+		agent:   n.Agent,
 		model:   n.Model,
 		prompt:  s.graph.Expand(n, n.Prompt, artifacts, inputs),
 		timeout: time.Duration(n.TimeoutSeconds) * time.Second,

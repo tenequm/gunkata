@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -39,9 +40,15 @@ const (
 	xdgDataDir   = ".local/share"
 	xdgStateDir  = ".local/state"
 	xdgCacheDir  = ".cache"
-	authDir      = ".gemini/antigravity-acp"
-	serverDir    = ".local/lib/antigravity-acp"
 )
+
+// acpxBuiltin marks a node's agent as one of acpx's own agent modes
+// (`acpx pi exec ...`) rather than an ACP agent command for `--agent`.
+const acpxBuiltin = "acpx:"
+
+// familyAgy is the family of every agent that is not an acpx built-in mode:
+// the agy ACP server command, which is what `--agent` has always pointed at.
+const familyAgy = "agy"
 
 // inherited is the whitelist that crosses the executor boundary. Skills,
 // agent instruction files, MCP config and everything else stay outside.
@@ -50,9 +57,24 @@ var inherited = []string{"PATH", "LANG", "LC_ALL", "USER", "LOGNAME"}
 // checkInherited is all a check needs: it is a command with an exit code.
 var checkInherited = []string{"PATH", "LANG"}
 
-// authFiles are the subscription credentials, the sole inheritance the
-// executor contract allows.
-var authFiles = []string{"settings.json", "acp_token.json"}
+// authLinks is the subscription credentials one agent family inherits, the
+// sole inheritance the executor contract allows, as paths that hold the same
+// place under the real home and under the executor's. A family links the
+// minimum its agent needs: skills, agent instruction files and MCP config hang
+// off the same homes and must not cross.
+var authLinks = map[string][]string{
+	familyAgy: {
+		".gemini/antigravity-acp/settings.json",
+		".gemini/antigravity-acp/acp_token.json",
+		// The agy wrapper resolves its .par through $HOME, so the server
+		// binaries ride the same explicit inheritance as the credentials.
+		".local/lib/antigravity-acp",
+	},
+	// pi reads its provider list, and the key with it, from this one file.
+	// Never the whole ~/.pi.
+	"pi":    {".pi/agent/models.json"},
+	"codex": {".codex/auth.json"},
+}
 
 // execSpec is one acpx invocation.
 type execSpec struct {
@@ -74,7 +96,8 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 		return noExit, fmt.Errorf("%w: %w", errACPXMissing, err)
 	}
 
-	if prepErr := prepareHome(spec.home, spec.work); prepErr != nil {
+	prepErr := prepareHome(spec.home, spec.work, spec.agent)
+	if prepErr != nil {
 		return noExit, prepErr
 	}
 
@@ -153,18 +176,30 @@ func killGroup(p *os.Process) error {
 	return nil
 }
 
+// acpxArgs builds the invocation. acpx takes its agent either as a command
+// behind --agent or as one of its own modes, named positionally after the
+// global flags; the node's agent says which.
 func acpxArgs(spec execSpec) []string {
-	seconds := strconv.Itoa(int(spec.timeout.Seconds()))
+	mode, builtin := strings.CutPrefix(spec.agent, acpxBuiltin)
 
-	return []string{
-		"--agent", spec.agent,
+	var args []string
+	if !builtin {
+		args = append(args, "--agent", spec.agent)
+	}
+
+	args = append(args,
 		"--cwd", spec.work,
 		"--model", spec.model,
-		"--timeout", seconds,
+		"--timeout", strconv.Itoa(int(spec.timeout.Seconds())),
 		"--approve-all",
 		"--format", "quiet",
-		"exec", spec.prompt,
+	)
+
+	if builtin {
+		args = append(args, mode)
 	}
+
+	return append(args, "exec", spec.prompt)
 }
 
 // executorEnv is the whole environment an executor gets: the whitelist, plus
@@ -196,8 +231,9 @@ func env(own, keys []string) []string {
 	return out
 }
 
-// prepareHome builds the executor's directories and links in the credentials.
-func prepareHome(home, work string) error {
+// prepareHome builds the executor's directories and links in the credentials
+// the node's agent family needs.
+func prepareHome(home, work, agent string) error {
 	dirs := []string{
 		work,
 		filepath.Join(home, tmpDir),
@@ -213,48 +249,46 @@ func prepareHome(home, work string) error {
 		}
 	}
 
-	return linkAuth(home)
+	return linkAuth(home, agent)
 }
 
-// linkAuth symlinks the real user's ACP credentials into the node's home.
-// The real home is resolved from the engine's own environment, which the
-// executor's HOME override never touches.
-func linkAuth(home string) error {
+// linkAuth symlinks the real user's credentials for the agent's family into
+// the node's home. The real home is resolved from the engine's own
+// environment, which the executor's HOME override never touches.
+func linkAuth(home, agent string) error {
 	realHome, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve real home: %w", err)
 	}
 
-	dst := filepath.Join(home, authDir)
-	if err := os.MkdirAll(dst, dirPerm); err != nil {
-		return fmt.Errorf("create auth dir: %w", err)
-	}
-
-	src := filepath.Join(realHome, authDir)
-
-	for _, name := range authFiles {
-		err := link(filepath.Join(src, name), filepath.Join(dst, name))
+	for _, rel := range authLinks[family(agent)] {
+		err := link(filepath.Join(realHome, rel), filepath.Join(home, rel))
 		if err != nil {
 			return err
 		}
 	}
 
-	// The agy wrapper resolves its .par through $HOME, so the server
-	// binaries ride the same explicit inheritance as the credentials.
-	libDir := filepath.Dir(filepath.Join(home, serverDir))
-	if err := os.MkdirAll(libDir, dirPerm); err != nil {
-		return fmt.Errorf("create server dir: %w", err)
+	return nil
+}
+
+// family names the credential set the agent needs. An acpx built-in mode is
+// its own family; any other agent value is the agy ACP server command.
+func family(agent string) string {
+	if mode, ok := strings.CutPrefix(agent, acpxBuiltin); ok {
+		return mode
 	}
 
-	src = filepath.Join(realHome, serverDir)
-
-	return link(src, filepath.Join(home, serverDir))
+	return familyAgy
 }
 
 // link points dst at src, skipping credentials the host does not have.
 func link(src, dst string) error {
 	if !exists(src) {
 		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
+		return fmt.Errorf("create credential dir: %w", err)
 	}
 
 	if exists(dst) {

@@ -108,6 +108,24 @@ nodes:
     check: ["grep", "-qx", "hello from gunkata consumed", "{{artifact}}"]
 `
 
+// builtinGraph overrides the default agent with an acpx built-in mode, the
+// other of the two invocation shapes.
+const builtinGraph = `
+name: stub-builtin
+defaults:
+  agent: /nonexistent/agent
+  model: stub-model
+  timeout_seconds: 7
+nodes:
+  - name: produce
+    agent: acpx:pi
+    prompt: |
+      ACTION=write
+      TARGET={{artifact}}
+      CONTENT=hello from gunkata
+    artifact: produce.txt
+`
+
 // hangGraph spawns a child and waits, so a test can watch the engine take the
 // whole process group down.
 const hangGraph = `
@@ -522,6 +540,119 @@ func TestRunStartsTheExecutorBare(t *testing.T) {
 	}
 
 	assertExecutorEnv(t, home)
+}
+
+// TestRunStartsAnACPXBuiltinAgent holds the other invocation shape: a node
+// whose agent names an acpx mode is started as `acpx <mode> exec`, with no
+// --agent, and the mode sits after the global flags where acpx requires it.
+func TestRunStartsAnACPXBuiltinAgent(t *testing.T) {
+	stubACPX(t)
+
+	res := runGraphFile(t, builtinGraph)
+	home := filepath.Join(res.RunDir, nodesDir, nodeProduce, homeDir)
+
+	argv := strings.Split(strings.TrimRight(
+		readFile(t, filepath.Join(home, "argv.txt")), newline), newline)
+
+	want := []string{
+		"--cwd", filepath.Join(res.RunDir, nodesDir, nodeProduce, workDir),
+		"--model", "stub-model",
+		"--timeout", "7",
+		"--approve-all",
+		"--format", "quiet",
+		"pi",
+		"exec",
+	}
+
+	if !slices.Equal(argv[:len(want)], want) {
+		t.Errorf("acpx argv = %v, want it to start with %v", argv, want)
+	}
+}
+
+// TestPrepareHomeLinksOneFamilysCredentials holds the bare-executor contract
+// where it is easiest to break: a node inherits the credentials of its own
+// agent family and nothing else that hangs off the same home.
+func TestPrepareHomeLinksOneFamilysCredentials(t *testing.T) {
+	realHome := t.TempDir()
+
+	for _, rel := range []string{
+		".gemini/antigravity-acp/settings.json",
+		".gemini/antigravity-acp/acp_token.json",
+		".local/lib/antigravity-acp",
+		".pi/agent/models.json",
+		".pi/agent/mcp.json",
+		".pi/agent/skills",
+		".codex/auth.json",
+		".codex/config.toml",
+	} {
+		writeCredential(t, filepath.Join(realHome, rel))
+	}
+
+	t.Setenv("HOME", realHome)
+
+	cases := map[string]struct {
+		agent  string
+		linked []string
+		absent []string
+	}{
+		"agy": {
+			agent: "/nonexistent/agy-acp-server",
+			linked: []string{
+				".gemini/antigravity-acp/settings.json",
+				".gemini/antigravity-acp/acp_token.json",
+				".local/lib/antigravity-acp",
+			},
+			absent: []string{".pi/agent/models.json", ".codex/auth.json"},
+		},
+		"pi": {
+			agent:  "acpx:pi",
+			linked: []string{".pi/agent/models.json"},
+			absent: []string{
+				".pi/agent/mcp.json",
+				".pi/agent/skills",
+				".gemini/antigravity-acp/acp_token.json",
+			},
+		},
+		"codex": {
+			agent:  "acpx:codex",
+			linked: []string{".codex/auth.json"},
+			absent: []string{".codex/config.toml", ".pi/agent/models.json"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			home := filepath.Join(t.TempDir(), homeDir)
+			if err := prepareHome(home, filepath.Join(home, workDir),
+				tc.agent); err != nil {
+				t.Fatalf("prepareHome() returned error: %v", err)
+			}
+
+			for _, rel := range tc.linked {
+				if !exists(filepath.Join(home, rel)) {
+					t.Errorf("%s was not linked into the node home", rel)
+				}
+			}
+
+			for _, rel := range tc.absent {
+				if exists(filepath.Join(home, rel)) {
+					t.Errorf("%s crossed the executor boundary", rel)
+				}
+			}
+		})
+	}
+}
+
+func writeCredential(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), scriptPerm); err != nil {
+		t.Fatalf("create credential dir: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte("{}"), graphPerm); err != nil {
+		t.Fatalf("write credential: %v", err)
+	}
 }
 
 // assertExecutorEnv holds the executor boundary: the engine-owned home and the

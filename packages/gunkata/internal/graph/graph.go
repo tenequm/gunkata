@@ -78,6 +78,7 @@ type Node struct {
 	Prompt         string   `yaml:"prompt"`
 	Artifact       string   `yaml:"artifact"`
 	Check          []string `yaml:"check"`
+	Agent          string   `yaml:"agent"`
 	Model          string   `yaml:"model"`
 	TimeoutSeconds int      `yaml:"timeout_seconds"`
 }
@@ -391,15 +392,22 @@ func (g *Graph) resolveDefaults() {
 	}
 
 	for i := range g.Nodes {
-		n := &g.Nodes[i]
+		g.resolveNode(&g.Nodes[i])
+	}
+}
 
-		if n.Model == unset {
-			n.Model = g.Defaults.Model
-		}
+// resolveNode copies onto one node whatever it did not override itself.
+func (g *Graph) resolveNode(n *Node) {
+	if n.Agent == unset {
+		n.Agent = g.Defaults.Agent
+	}
 
-		if n.TimeoutSeconds == emptyLen {
-			n.TimeoutSeconds = g.Defaults.TimeoutSeconds
-		}
+	if n.Model == unset {
+		n.Model = g.Defaults.Model
+	}
+
+	if n.TimeoutSeconds == emptyLen {
+		n.TimeoutSeconds = g.Defaults.TimeoutSeconds
 	}
 }
 
