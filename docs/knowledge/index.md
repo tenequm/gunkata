@@ -46,3 +46,7 @@ Enter through this listing and open only what the task needs.
 * [A bare executor HOME must still carry the agy server directory](findings/executor-homes-need-the-agy-server-dir.md) - The Antigravity ACP wrapper resolves its .par through $HOME, so an engine-owned HOME breaks executor startup until the server directory is explicitly inherited alongside the credentials.
 * [lefthook guarantees less about the index than it appears](findings/lefthook-guarantees-less-about-the-index-than-it-appears.md) - stage_fixed re-stages the list it was given rather than what changed, only partially staged files are hidden, the backup stash is shared across linked worktrees, and LEFTHOOK=0 turns any run into a silent pass.
 * [acpx is not flake-pinned; executor CLIs never will be](findings/runtime-deps-not-yet-flake-pinned.md) - pond is packaged in the flake from its release binaries, acpx is host-provided pending a pnpm packaging route, and the executor CLIs are host-provided by necessity.
+
+# References
+
+* [pond PR 289 as a review ground-truth case](references/pond-pr-289-review-ground-truth.md) - A hand /polish review of tenequm/pond#289 (lance 12 upgrade) with 8 findings and 10 validated non-findings, pinned to head 6a83a53, held as the grading key for a future replay of the gunkata review flow.
