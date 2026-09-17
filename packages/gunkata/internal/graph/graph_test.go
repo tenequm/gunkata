@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,11 @@ const (
 	nodeGate    = "gate"
 	nodeConsume = "consume"
 	loadFailed  = "Load() returned error: %v"
+	inputCount  = 2
+	firstInput  = 0
+	artifactsAt = "/a"
+	inputsAt    = "/i"
+	seedInput   = "seed.txt"
 )
 
 const validGraph = `
@@ -43,6 +49,24 @@ nodes:
     check: ["test", "-s", "{{artifact}}"]
     model: model-b
     timeout_seconds: 30
+`
+
+// inputGraph declares inputs and references one from a prompt and a check.
+const inputGraph = `
+name: starter-input
+defaults:
+  agent: /bin/agent
+  model: model-a
+inputs:
+  - seed.txt
+  - nested/extra.txt
+nodes:
+  - name: produce
+    prompt: read {{input:seed.txt}} and {{input:nested/extra.txt}} into {{artifact}}
+    artifact: produce.txt
+  - name: gate
+    needs: [produce]
+    check: ["grep", "-qxf", "{{input:seed.txt}}", "{{artifact:produce}}"]
 `
 
 // invalidGraphs is one graph per way a graph can fail validation.
@@ -198,6 +222,59 @@ defaults: {agent: /bin/a, model: m}
 nodes: [{name: n, check: ["test", "-s", "{{artifact:ghost}}"]}]
 `,
 		want: ErrUnknownRef,
+	},
+	"duplicate input": {
+		body: `
+name: t
+defaults: {agent: /bin/a, model: m}
+inputs: [seed, seed]
+nodes: [{name: n, check: ["true"]}]
+`,
+		want: ErrDuplicateInput,
+	},
+	"absolute input": {
+		body: `
+name: t
+defaults: {agent: /bin/a, model: m}
+inputs: [/etc/passwd]
+nodes: [{name: n, check: ["true"]}]
+`,
+		want: ErrInputName,
+	},
+	"escaping input": {
+		body: `
+name: t
+defaults: {agent: /bin/a, model: m}
+inputs: ["../outside.txt"]
+nodes: [{name: n, check: ["true"]}]
+`,
+		want: ErrInputName,
+	},
+	"empty input name": {
+		body: `
+name: t
+defaults: {agent: /bin/a, model: m}
+inputs: [""]
+nodes: [{name: n, check: ["true"]}]
+`,
+		want: ErrInputName,
+	},
+	"reference to undeclared input": {
+		body: `
+name: t
+defaults: {agent: /bin/a, model: m}
+nodes: [{name: n, prompt: "read {{input:seed}}", artifact: n.txt}]
+`,
+		want: ErrUnknownInput,
+	},
+	"check reference to undeclared input": {
+		body: `
+name: t
+defaults: {agent: /bin/a, model: m}
+inputs: [seed]
+nodes: [{name: n, check: ["test", "-s", "{{input:other}}"]}]
+`,
+		want: ErrUnknownInput,
 	},
 }
 
@@ -374,7 +451,7 @@ func TestExpand(t *testing.T) {
 
 	produce := g.Node(nodeProduce)
 
-	got := g.Expand(produce, produce.Prompt, dir)
+	got := g.Expand(produce, produce.Prompt, dir, inputsAt)
 	if !strings.Contains(got, filepath.Join(dir, "produce.txt")) {
 		t.Errorf("expanded prompt = %q, want the artifact path", got)
 	}
@@ -390,7 +467,7 @@ func TestExpandAllLeavesTheGraphAlone(t *testing.T) {
 	g := loadBody(t, validGraph)
 	gate := g.Node(nodeGate)
 
-	argv := g.ExpandAll(gate, gate.Check, "/a")
+	argv := g.ExpandAll(gate, gate.Check, artifactsAt, inputsAt)
 	want := "/a/produce.txt"
 
 	if last := argv[len(argv)-oneNeed]; last != want {
@@ -409,10 +486,52 @@ func TestExpandMixedReferences(t *testing.T) {
 	g := loadBody(t, validGraph)
 
 	consume := g.Node(nodeConsume)
-	got := strings.TrimSpace(g.Expand(consume, consume.Prompt, "/a"))
+	got := strings.TrimSpace(
+		g.Expand(consume, consume.Prompt, artifactsAt, inputsAt))
 	want := "read /a/produce.txt into /a/consume.txt"
 
 	if got != want {
 		t.Errorf("expanded prompt = %q, want %q", got, want)
+	}
+}
+
+func TestLoadInputs(t *testing.T) {
+	t.Parallel()
+
+	g := loadBody(t, inputGraph)
+
+	if len(g.Inputs) != inputCount {
+		t.Fatalf("loaded %d inputs, want %d", len(g.Inputs), inputCount)
+	}
+
+	if g.Inputs[firstInput] != seedInput {
+		t.Errorf("first input = %q, want %q", g.Inputs[firstInput], seedInput)
+	}
+}
+
+// TestExpandInput covers an input placeholder beside an artifact one, in both
+// a prompt and a check.
+func TestExpandInput(t *testing.T) {
+	t.Parallel()
+
+	g := loadBody(t, inputGraph)
+
+	produce := g.Node(nodeProduce)
+	got := strings.TrimSpace(
+		g.Expand(produce, produce.Prompt, artifactsAt, inputsAt))
+	want := "read /i/seed.txt and /i/nested/extra.txt into /a/produce.txt"
+
+	if got != want {
+		t.Errorf("expanded prompt = %q, want %q", got, want)
+	}
+
+	gate := g.Node(nodeGate)
+	argv := g.ExpandAll(gate, gate.Check, artifactsAt, inputsAt)
+	wantArgv := []string{
+		"grep", "-qxf", "/i/seed.txt", "/a/produce.txt",
+	}
+
+	if !slices.Equal(argv, wantArgv) {
+		t.Errorf("expanded check = %v, want %v", argv, wantArgv)
 	}
 }

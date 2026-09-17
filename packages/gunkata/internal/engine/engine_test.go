@@ -29,6 +29,9 @@ const (
 	nodeProduce   = "produce"
 	nodeGate      = "gate"
 	nodeConsume   = "consume"
+	seedName      = "seed.txt"
+	seedBody      = "seeded" + newline
+	derivedBody   = "seeded consumed" + newline
 	produceRef    = "artifacts/produce.txt"
 	consumeRef    = "artifacts/consume.txt"
 	outcomeFmt    = "outcome = %q, want %q"
@@ -121,6 +124,29 @@ nodes:
     artifact: pids.txt
 `
 
+// inputGraph gates on an input file the engine copied in, then derives an
+// artifact from it, so both the check and the prompt expand {{input:...}}.
+const inputGraph = `
+name: stub-input
+defaults:
+  agent: /nonexistent/agent
+  model: stub-model
+  timeout_seconds: 7
+inputs:
+  - seed.txt
+nodes:
+  - name: gate
+    check: ["grep", "-qx", "seeded", "{{input:seed.txt}}"]
+  - name: consume
+    needs: [gate]
+    prompt: |
+      ACTION=derive
+      SOURCE={{input:seed.txt}}
+      TARGET={{artifact}}
+    artifact: consume.txt
+    check: ["grep", "-qx", "seeded consumed", "{{artifact}}"]
+`
+
 var runIDPattern = regexp.MustCompile(`^\d{8}T\d{6}Z[0-9a-f]{4}$`)
 
 // recordFields is the record's node object, field for field.
@@ -169,6 +195,32 @@ func runGraphFile(t *testing.T, body string) Result {
 	}
 
 	return res
+}
+
+// runWithInputs runs body with the given bindings and hands back whatever Run
+// concluded, so a caller can assert on the result or on the error.
+func runWithInputs(
+	t *testing.T, body string, inputs map[string]string,
+) (Result, error) {
+	t.Helper()
+
+	return Run(context.Background(), Options{
+		GraphPath: writeGraph(t, body),
+		RunsRoot:  filepath.Join(t.TempDir(), "runs"),
+		Inputs:    inputs,
+	})
+}
+
+// writeSource writes a file for an --input binding to point at.
+func writeSource(t *testing.T, content string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), seedName)
+	if err := os.WriteFile(path, []byte(content), graphPerm); err != nil {
+		t.Fatalf("write input source: %v", err)
+	}
+
+	return path
 }
 
 type wantNode struct {
@@ -432,6 +484,10 @@ func TestRunCreatesNodeDirsOnlyForExecutors(t *testing.T) {
 
 	if exists(filepath.Join(res.RunDir, nodesDir, nodeGate)) {
 		t.Error("check-only node gate got a nodes/ directory")
+	}
+
+	if exists(filepath.Join(res.RunDir, inputsDir)) {
+		t.Error("a graph with no inputs got an inputs/ directory")
 	}
 }
 
@@ -713,6 +769,105 @@ func TestRunCheckReportsTheExitCode(t *testing.T) {
 func TestRunCheckRejectsAnEmptyArgv(t *testing.T) {
 	if _, err := runCheck(context.Background(), nil, t.TempDir()); err == nil {
 		t.Error("runCheck() accepted an empty argv, want an error")
+	}
+}
+
+// TestRunBindsDeclaredInputs holds the whole path: the bound file is copied
+// into the run, a check and a prompt both see it there, and the record states
+// where it came from.
+func TestRunBindsDeclaredInputs(t *testing.T) {
+	stubACPX(t)
+
+	src := writeSource(t, seedBody)
+
+	res, err := runWithInputs(t, inputGraph, map[string]string{seedName: src})
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if res.Outcome != OutcomeSucceeded {
+		t.Errorf(outcomeFmt, res.Outcome, OutcomeSucceeded)
+	}
+
+	copied := filepath.Join(res.RunDir, inputsDir, seedName)
+	if got := readFile(t, copied); got != seedBody {
+		t.Errorf("inputs/%s = %q, want %q", seedName, got, seedBody)
+	}
+
+	assertCopiedInput(t, copied)
+
+	if got := readFile(t, filepath.Join(res.RunDir, consumeRef)); got !=
+		derivedBody {
+		t.Errorf("consume.txt = %q, want %q", got, derivedBody)
+	}
+
+	rec := readRecord(t, res.RunDir)
+
+	inputs, ok := rec["inputs"].(map[string]any)
+	if !ok {
+		t.Fatalf("record inputs = %T, want an object", rec["inputs"])
+	}
+
+	assertString(t, "inputs."+seedName, inputs[seedName], src)
+}
+
+// assertCopiedInput insists the run owns its own copy: a regular file, not a
+// link to the source, and readable only by the engine.
+func assertCopiedInput(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("stat copied input: %v", err)
+	}
+
+	if !info.Mode().IsRegular() {
+		t.Errorf("inputs/%s is %v, want a regular file",
+			seedName, info.Mode().Type())
+	}
+
+	if info.Mode().Perm() != os.FileMode(filePerm) {
+		t.Errorf("inputs/%s mode = %v, want %v",
+			seedName, info.Mode().Perm(), os.FileMode(filePerm))
+	}
+}
+
+// TestRunRejectsBadInputBindings covers every way a binding fails. Each is an
+// error rather than a parked run, and nothing of the graph starts.
+func TestRunRejectsBadInputBindings(t *testing.T) {
+	seed := writeSource(t, seedBody)
+	empty := writeSource(t, unset)
+	missing := filepath.Join(t.TempDir(), "gone.txt")
+
+	cases := map[string]map[string]string{
+		"declared input unbound": {},
+		"undeclared name bound":  {seedName: seed, "extra.txt": seed},
+		"source missing":         {seedName: missing},
+		"source empty":           {seedName: empty},
+		"source is a directory":  {seedName: t.TempDir()},
+	}
+
+	for name, inputs := range cases {
+		t.Run(name, func(t *testing.T) {
+			res, err := runWithInputs(t, inputGraph, inputs)
+			if err == nil {
+				t.Fatalf("Run() accepted %v, want an error", inputs)
+			}
+
+			if exists(filepath.Join(res.RunDir, nodesDir)) {
+				t.Error("a node started before the inputs were bound")
+			}
+		})
+	}
+}
+
+func TestRunRejectsInputsAGraphDoesNotDeclare(t *testing.T) {
+	stubACPX(t)
+
+	_, err := runWithInputs(t, passGraph,
+		map[string]string{seedName: writeSource(t, seedBody)})
+	if err == nil {
+		t.Fatal("Run() accepted an input for a graph that declares none")
 	}
 }
 

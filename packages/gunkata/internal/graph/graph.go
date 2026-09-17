@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -19,11 +20,16 @@ const DefaultTimeoutSeconds = 240
 // The lint config forbids bare literals, so the ones this package repeats are
 // named here.
 const (
-	unset        = ""
-	emptyLen     = 0
-	minTimeout   = 0
-	refNameGroup = 1
+	unset      = ""
+	emptyLen   = 0
+	minTimeout = 0
+	// Submatch groups of placeholder, and the kind that is not an artifact.
+	wholeMatch   = 0
+	kindGroup    = 1
+	refNameGroup = 2
+	kindInput    = "input"
 	nodeErrFmt   = "node %q: %w"
+	inputErrFmt  = "input %q: %w"
 )
 
 // Validation failures. Each is wrapped with the offending node's name.
@@ -41,12 +47,19 @@ var (
 	ErrTimeout       = errors.New("timeout_seconds must not be negative")
 	ErrArtifactRef   = errors.New("reference names a node with no artifact")
 	ErrUnknownRef    = errors.New("reference names an unknown node")
+
+	// Input failures, wrapped with the offending input's name.
+	ErrInputName      = errors.New("input must stay inside the inputs dir")
+	ErrDuplicateInput = errors.New("duplicate input name")
+	ErrUnknownInput   = errors.New("reference names an undeclared input")
 )
 
-// Graph is a declared unit of work: nodes, and the evidence each one owes.
+// Graph is a declared unit of work: nodes, the files the run is given, and the
+// evidence each node owes.
 type Graph struct {
 	Name     string   `yaml:"name"`
 	Defaults Defaults `yaml:"defaults"`
+	Inputs   []string `yaml:"inputs"`
 	Nodes    []Node   `yaml:"nodes"`
 }
 
@@ -69,8 +82,8 @@ type Node struct {
 	TimeoutSeconds int      `yaml:"timeout_seconds"`
 }
 
-// placeholder matches {{artifact}} and {{artifact:<node>}}.
-var placeholder = regexp.MustCompile(`\{\{artifact(?::([^}]*))?\}\}`)
+// placeholder matches {{artifact}}, {{artifact:<node>}} and {{input:<name>}}.
+var placeholder = regexp.MustCompile(`\{\{(artifact|input)(?::([^}]*))?\}\}`)
 
 // cycle marks a node's state during depth-first cycle detection.
 type cycle int
@@ -117,28 +130,54 @@ func (g *Graph) Node(name string) *Node {
 	return nil
 }
 
-// Expand replaces {{artifact}} with n's own artifact path and
-// {{artifact:<node>}} with that node's, both absolute under artifactsDir. A
-// reference Validate would have rejected is left as written.
-func (g *Graph) Expand(n *Node, s, artifactsDir string) string {
+// Expand replaces {{artifact}} with n's own artifact path,
+// {{artifact:<node>}} with that node's - both absolute under artifactsDir -
+// and {{input:<name>}} with that input's path under inputsDir. A reference
+// Validate would have rejected is left as written.
+func (g *Graph) Expand(n *Node, s, artifactsDir, inputsDir string) string {
 	return placeholder.ReplaceAllStringFunc(s, func(match string) string {
-		target, err := g.reference(n, match)
-		if err != nil || target.Artifact == unset {
-			return match
-		}
-
-		return filepath.Join(artifactsDir, target.Artifact)
+		return g.expandOne(n, placeholder.FindStringSubmatch(match),
+			artifactsDir, inputsDir)
 	})
 }
 
+// expandOne resolves one matched placeholder to its path.
+func (g *Graph) expandOne(
+	n *Node, groups []string, artifactsDir, inputsDir string,
+) string {
+	name := groups[refNameGroup]
+
+	if groups[kindGroup] == kindInput {
+		if !g.hasInput(name) {
+			return groups[wholeMatch]
+		}
+
+		return filepath.Join(inputsDir, name)
+	}
+
+	target, err := g.reference(n, name)
+	if err != nil || target.Artifact == unset {
+		return groups[wholeMatch]
+	}
+
+	return filepath.Join(artifactsDir, target.Artifact)
+}
+
 // ExpandAll expands every element of argv from n's point of view.
-func (g *Graph) ExpandAll(n *Node, argv []string, dir string) []string {
+func (g *Graph) ExpandAll(
+	n *Node, argv []string, artifactsDir, inputsDir string,
+) []string {
 	expanded := make([]string, len(argv))
 	for i, arg := range argv {
-		expanded[i] = g.Expand(n, arg, dir)
+		expanded[i] = g.Expand(n, arg, artifactsDir, inputsDir)
 	}
 
 	return expanded
+}
+
+// hasInput reports whether the graph declares the named input.
+func (g *Graph) hasInput(name string) bool {
+	return slices.Contains(g.Inputs, name)
 }
 
 // Validate reports the first way in which the graph is not runnable.
@@ -148,6 +187,10 @@ func (g *Graph) Validate() error {
 	}
 
 	if err := g.validateNames(); err != nil {
+		return err
+	}
+
+	if err := g.validateInputs(); err != nil {
 		return err
 	}
 
@@ -197,6 +240,26 @@ func (g *Graph) validateNames() error {
 	return nil
 }
 
+// validateInputs holds every declared input to the artifact path rule and to
+// a single declaration, so an input names exactly one file in the run.
+func (g *Graph) validateInputs() error {
+	seen := make(map[string]bool, len(g.Inputs))
+
+	for _, name := range g.Inputs {
+		if !insideRunDir(name) {
+			return fmt.Errorf(inputErrFmt, name, ErrInputName)
+		}
+
+		if seen[name] {
+			return fmt.Errorf(inputErrFmt, name, ErrDuplicateInput)
+		}
+
+		seen[name] = true
+	}
+
+	return nil
+}
+
 func (g *Graph) validateNode(n *Node) error {
 	switch {
 	case n.Prompt == unset && n.Artifact == unset &&
@@ -204,7 +267,7 @@ func (g *Graph) validateNode(n *Node) error {
 		return fmt.Errorf(nodeErrFmt, n.Name, ErrNoEvidence)
 	case n.TimeoutSeconds < minTimeout:
 		return fmt.Errorf(nodeErrFmt, n.Name, ErrTimeout)
-	case n.Artifact != unset && !insideArtifacts(n.Artifact):
+	case n.Artifact != unset && !insideRunDir(n.Artifact):
 		return fmt.Errorf("node %q artifact %q: %w",
 			n.Name, n.Artifact, ErrArtifactPath)
 	}
@@ -219,8 +282,8 @@ func (g *Graph) validateNode(n *Node) error {
 	return g.validateRefs(n)
 }
 
-// validateRefs holds every artifact placeholder in the node's prompt and
-// check to a node that actually declares an artifact.
+// validateRefs holds every placeholder in the node's prompt and check to a
+// node that actually declares an artifact, or to a declared input.
 func (g *Graph) validateRefs(n *Node) error {
 	if err := g.validateRefsIn(n, n.Prompt); err != nil {
 		return err
@@ -236,24 +299,44 @@ func (g *Graph) validateRefs(n *Node) error {
 }
 
 func (g *Graph) validateRefsIn(n *Node, s string) error {
-	for _, match := range placeholder.FindAllString(s, -1) {
-		target, err := g.reference(n, match)
-		if err != nil {
+	for _, groups := range placeholder.FindAllStringSubmatch(s, -1) {
+		if err := g.validateRef(n, groups); err != nil {
 			return err
-		}
-
-		if target.Artifact == unset {
-			return fmt.Errorf("node %q references %q: %w",
-				n.Name, target.Name, ErrArtifactRef)
 		}
 	}
 
 	return nil
 }
 
-// reference resolves one placeholder to the node whose artifact it names.
-func (g *Graph) reference(n *Node, match string) (*Node, error) {
-	name := placeholder.FindStringSubmatch(match)[refNameGroup]
+// validateRef holds one matched placeholder to what the graph declares.
+func (g *Graph) validateRef(n *Node, groups []string) error {
+	name := groups[refNameGroup]
+
+	if groups[kindGroup] == kindInput {
+		if !g.hasInput(name) {
+			return fmt.Errorf("node %q references input %q: %w",
+				n.Name, name, ErrUnknownInput)
+		}
+
+		return nil
+	}
+
+	target, err := g.reference(n, name)
+	if err != nil {
+		return err
+	}
+
+	if target.Artifact == unset {
+		return fmt.Errorf("node %q references %q: %w",
+			n.Name, target.Name, ErrArtifactRef)
+	}
+
+	return nil
+}
+
+// reference resolves one artifact placeholder to the node whose artifact it
+// names. An empty name is the node's own artifact.
+func (g *Graph) reference(n *Node, name string) (*Node, error) {
 	if name == unset {
 		return n, nil
 	}
@@ -320,8 +403,9 @@ func (g *Graph) resolveDefaults() {
 	}
 }
 
-// insideArtifacts reports whether p stays under the run's artifacts dir.
-func insideArtifacts(p string) bool {
+// insideRunDir reports whether p stays under the run directory it is stated
+// relative to. Artifact and input paths share the rule.
+func insideRunDir(p string) bool {
 	if filepath.IsAbs(p) {
 		return false
 	}

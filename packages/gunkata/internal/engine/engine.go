@@ -32,6 +32,9 @@ const (
 type Options struct {
 	GraphPath string
 	RunsRoot  string
+	// Inputs binds each input the graph declares to the file the run copies
+	// in. A graph that declares none takes none.
+	Inputs map[string]string
 	// Progress receives one human-readable line per node transition. It is
 	// never the run's result; that is the record.
 	Progress io.Writer
@@ -64,12 +67,19 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return res, err
 	}
 
+	inputs, bindErr := l.bindInputs(g.Inputs, opts.Inputs)
+	if bindErr != nil {
+		return res, fmt.Errorf("bind inputs: %w", bindErr)
+	}
+
 	s := newScheduler(g, l, opts.Progress)
 	started := time.Now()
 
 	s.execute(ctx)
 
 	rec := s.record(started, time.Now())
+	rec.Inputs = inputs
+
 	if err := l.writeRecord(rec); err != nil {
 		return res, err
 	}
@@ -205,10 +215,12 @@ func (s *scheduler) runPrompt(
 		return false
 	}
 
+	artifacts, inputs := s.layout.artifacts(), s.layout.inputs()
+
 	code, err := runExecutor(ctx, execSpec{
 		agent:   s.graph.Defaults.Agent,
 		model:   n.Model,
-		prompt:  s.graph.Expand(n, n.Prompt, s.layout.artifacts()),
+		prompt:  s.graph.Expand(n, n.Prompt, artifacts, inputs),
 		timeout: time.Duration(n.TimeoutSeconds) * time.Second,
 		home:    s.layout.home(n.Name),
 		work:    s.layout.work(n.Name),
@@ -243,7 +255,8 @@ func (s *scheduler) artifactPresent(n *graph.Node) bool {
 func (s *scheduler) checkPasses(
 	ctx context.Context, n *graph.Node, rec *nodeRecord,
 ) bool {
-	argv := s.graph.ExpandAll(n, n.Check, s.layout.artifacts())
+	argv := s.graph.ExpandAll(n, n.Check,
+		s.layout.artifacts(), s.layout.inputs())
 
 	code, err := runCheck(ctx, argv, s.layout.dir)
 	if err != nil {

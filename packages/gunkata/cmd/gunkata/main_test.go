@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -61,6 +62,35 @@ func assertUsage(t *testing.T, argv []string) {
 
 	if !strings.Contains(errOut.String(), "usage:") {
 		t.Errorf("stderr = %q, want usage", errOut.String())
+	}
+}
+
+func TestInputBindings(t *testing.T) {
+	t.Parallel()
+
+	bindings := inputBindings{}
+	if err := bindings.Set("seed.txt=/tmp/seed"); err != nil {
+		t.Fatalf("Set() returned error: %v", err)
+	}
+
+	if err := bindings.Set("other=/tmp/a=b"); err != nil {
+		t.Fatalf("Set() returned error: %v", err)
+	}
+
+	want := inputBindings{"seed.txt": "/tmp/seed", "other": "/tmp/a=b"}
+	if !maps.Equal(bindings, want) {
+		t.Errorf("bindings = %v, want %v", bindings, want)
+	}
+
+	if err := bindings.Set("seed.txt=/tmp/again"); err == nil {
+		t.Error("Set() accepted the same input twice, want an error")
+	}
+
+	fresh := inputBindings{}
+	for _, raw := range []string{"seed.txt", "=/tmp/seed", "seed.txt="} {
+		if err := fresh.Set(raw); err == nil {
+			t.Errorf("Set(%q) accepted it, want an error", raw)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -16,6 +17,7 @@ import (
 // reader needs the directory and nothing else.
 const (
 	artifactsDir = "artifacts"
+	inputsDir    = "inputs"
 	nodesDir     = "nodes"
 	homeDir      = "home"
 	workDir      = "work"
@@ -34,7 +36,12 @@ const (
 	idAttempts = 8
 )
 
-var errRunID = errors.New("could not claim a free run directory")
+var (
+	errRunID        = errors.New("could not claim a free run directory")
+	errUnknownInput = errors.New("no such input is declared by the graph")
+	errUnboundInput = errors.New("declared input has no --input binding")
+	errInputSource  = errors.New("input source is not a non-empty regular file")
+)
 
 // Outcome is a run's verdict.
 type Outcome string
@@ -56,12 +63,15 @@ const (
 
 // record is the run's final account of itself, written to record.json.
 type record struct {
-	RunID      string                 `json:"run_id"`
-	Graph      string                 `json:"graph"`
-	Outcome    Outcome                `json:"outcome"`
-	StartedAt  string                 `json:"started_at"`
-	FinishedAt string                 `json:"finished_at"`
-	Nodes      map[string]*nodeRecord `json:"nodes"`
+	RunID      string  `json:"run_id"`
+	Graph      string  `json:"graph"`
+	Outcome    Outcome `json:"outcome"`
+	StartedAt  string  `json:"started_at"`
+	FinishedAt string  `json:"finished_at"`
+	// Inputs names each declared input and the source file it was bound to.
+	// A graph that declares none records none.
+	Inputs map[string]string      `json:"inputs,omitempty"`
+	Nodes  map[string]*nodeRecord `json:"nodes"`
 }
 
 // nodeRecord holds one node's evidence: the exit codes it produced and the
@@ -143,6 +153,10 @@ func (l *layout) artifacts() string {
 	return filepath.Join(l.dir, artifactsDir)
 }
 
+func (l *layout) inputs() string {
+	return filepath.Join(l.dir, inputsDir)
+}
+
 func (l *layout) nodeDir(name string) string {
 	return filepath.Join(l.dir, nodesDir, name)
 }
@@ -185,6 +199,98 @@ func (l *layout) copyGraph(src string) error {
 	}
 
 	return nil
+}
+
+// bindInputs copies every file bound to a declared input into the run's
+// inputs dir and reports the absolute source each name was bound to. It runs
+// before any node does, so a misbound run fails outright instead of parking.
+func (l *layout) bindInputs(
+	declared []string, bound map[string]string,
+) (map[string]string, error) {
+	for name := range bound {
+		if !slices.Contains(declared, name) {
+			return nil, fmt.Errorf("%w: %q", errUnknownInput, name)
+		}
+	}
+
+	if len(declared) == emptyLen {
+		return nil, nil
+	}
+
+	return l.copyInputs(declared, bound)
+}
+
+// copyInputs copies one file per declared input, in declaration order.
+func (l *layout) copyInputs(
+	declared []string, bound map[string]string,
+) (map[string]string, error) {
+	sources := make(map[string]string, len(declared))
+
+	for _, name := range declared {
+		src, ok := bound[name]
+		if !ok {
+			return nil, fmt.Errorf("%w: %q", errUnboundInput, name)
+		}
+
+		abs, err := l.copyInput(name, src)
+		if err != nil {
+			return nil, err
+		}
+
+		sources[name] = abs
+	}
+
+	return sources, nil
+}
+
+// copyInput copies the bound file's bytes into the run's inputs dir and
+// reports the absolute source it came from, so the run holds its own copy of
+// what it was given rather than a link to a file someone else owns.
+func (l *layout) copyInput(name, src string) (string, error) {
+	abs, err := filepath.Abs(src)
+	if err != nil {
+		return unset, fmt.Errorf("resolve input %q: %w", name, err)
+	}
+
+	raw, err := readInputSource(abs)
+	if err != nil {
+		return unset, fmt.Errorf("input %q: %w", name, err)
+	}
+
+	dst := filepath.Join(l.inputs(), name)
+	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
+		return unset, fmt.Errorf("create inputs dir: %w", err)
+	}
+
+	if err := os.WriteFile(dst, raw, filePerm); err != nil {
+		return unset, fmt.Errorf("write input %q: %w", name, err)
+	}
+
+	return abs, nil
+}
+
+// readInputSource holds a binding to what can be evidence: a regular file
+// with something in it.
+func readInputSource(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errInputSource, err)
+	}
+
+	switch {
+	case !info.Mode().IsRegular():
+		return nil, fmt.Errorf("%w: %s is not a regular file",
+			errInputSource, path)
+	case info.Size() == emptyLen:
+		return nil, fmt.Errorf("%w: %s is empty", errInputSource, path)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errInputSource, err)
+	}
+
+	return raw, nil
 }
 
 // writeRecord writes record.json through a temp file and a rename, so a

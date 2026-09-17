@@ -3,12 +3,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/tenequm/gunkata/internal/engine"
@@ -25,7 +27,8 @@ const (
 )
 
 const (
-	runUsage   = "usage: gunkata run [--runs-root <dir>] <graph.yaml>"
+	runUsage = "usage: gunkata run [--runs-root <dir>] " +
+		"[--input <name>=<path>]... <graph.yaml>"
 	gradeUsage = "usage: gunkata grade --variant pass|fail <runDir>"
 	// runsRootFallback is used when XDG_STATE_HOME is unset.
 	runsRootFallback = ".local/state"
@@ -41,6 +44,32 @@ const (
 
 // version is overridden at release time with -ldflags.
 var version = "0.0.0-dev"
+
+var (
+	errInputSyntax   = errors.New("--input wants <name>=<path>")
+	errInputRepeated = errors.New("--input names the same input twice")
+)
+
+// inputBindings collects the repeatable --input flag. Each occurrence binds
+// one declared input name to one file on disk.
+type inputBindings map[string]string
+
+func (inputBindings) String() string { return unset }
+
+func (b inputBindings) Set(raw string) error {
+	name, path, ok := strings.Cut(raw, "=")
+	if !ok || name == unset || path == unset {
+		return fmt.Errorf("%w: %q", errInputSyntax, raw)
+	}
+
+	if _, dup := b[name]; dup {
+		return fmt.Errorf("%w: %q", errInputRepeated, name)
+	}
+
+	b[name] = path
+
+	return nil
+}
 
 func main() {
 	os.Exit(dispatch(os.Args, os.Stdout, os.Stderr))
@@ -83,6 +112,9 @@ func runGraph(args []string, out, errOut io.Writer) int {
 	flags.SetOutput(errOut)
 	runsRoot := flags.String("runs-root", defaultRunsRoot(),
 		"directory that holds run directories")
+	inputs := inputBindings{}
+	flags.Var(inputs, "input",
+		"bind a declared input: <name>=<path> (repeatable)")
 
 	if err := flags.Parse(args); err != nil {
 		return exitFailure
@@ -101,6 +133,7 @@ func runGraph(args []string, out, errOut io.Writer) int {
 	res, err := engine.Run(ctx, engine.Options{
 		GraphPath: flags.Arg(first),
 		RunsRoot:  *runsRoot,
+		Inputs:    inputs,
 		Progress:  errOut,
 	})
 
