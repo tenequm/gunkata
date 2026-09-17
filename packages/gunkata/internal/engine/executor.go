@@ -246,7 +246,9 @@ func linkAuth(home string) error {
 		return fmt.Errorf("create server dir: %w", err)
 	}
 
-	return link(filepath.Join(realHome, serverDir), filepath.Join(home, serverDir))
+	src = filepath.Join(realHome, serverDir)
+
+	return link(src, filepath.Join(home, serverDir))
 }
 
 // link points dst at src, skipping credentials the host does not have.
