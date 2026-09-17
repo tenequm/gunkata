@@ -2,15 +2,24 @@
 # inside proxy prefix"). Not part of examples/ - that directory is the graded
 # corpus and this graph is not graded.
 #
-# Run: gunkata run --input diff=<path-to-cuttle-pr62.diff> graphs/review-cuttle-62.yaml
+# Run: gunkata run --input diff=<path-to-cuttle-pr62.diff>
+#                  --input pr_body=<path-to-cuttle-pr62-body.txt>
+#                  graphs/review-cuttle-62.yaml
 #
-# Shape: 3 independent lenses -> one verify per lens -> one reconcile.
+# Both inputs are mandatory: the engine binds every declared input before any
+# node starts. The diff is regenerable with
+#   gh pr diff 62 --repo glim-sh/cuttle
+# and the description with
+#   gh pr view 62 --repo glim-sh/cuttle --json body --jq .body
+#
+# Shape: 4 independent lenses -> one verify per lens -> one reconcile.
 # The lenses find, the verifies re-derive each finding from the actual code
 # (G2/G3), and reconcile keeps every finding exactly once (G5).
 name: review-cuttle-62
 
 inputs:
   - diff
+  - pr_body
 
 defaults:
   agent: agy-acp-server
@@ -204,6 +213,90 @@ nodes:
     artifact: lens-tests.json
     check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
 
+  - name: lens-claims
+    prompt: |
+      You are reviewing one pull request for prose that asserts what the code
+      does not do. Report findings only; change nothing.
+
+      PULL REQUEST
+      glim-sh/cuttle #62, "fix(viewer): keep websocket inside proxy prefix"
+      (+388/-7, 4 files). The shipped noVNC viewer page now resolves its
+      websocket URL relative to the page instead of the origin root, so a
+      path-prefixing reverse proxy keeps its prefix; a smoke harness driving
+      the page through test proxies comes with it.
+
+      MATERIALS
+      - The unified diff of the pull request: {{input:diff}}
+      - The pull request's description, as its author wrote it:
+        {{input:pr_body}}
+      - The repository, checked out at the pull request's head commit
+        8fd8af8f96ca8f5cba5975c9228f2cb5e252c6e3:
+        /home/tenequm/pjv/glim-sh/cuttle
+        READ ONLY. Never write, create, delete, move, rename, stage, commit,
+        checkout or otherwise modify anything under that directory, and never
+        run a command that would. Read files and search them; that is all.
+      - You have no network access to GitHub; the diff file, the description
+        and the checkout are the whole record of the change.
+
+      WHAT TO LOOK FOR
+      Every sentence that states what the code does is a claim, and a claim is
+      true only if the code says so. Hunt the claims this change leaves false:
+      - Comments the diff adds, and comments it leaves standing in the files
+        it touches. A comment the change made false is the same defect as one
+        that was always false.
+      - Doc strings, README text, operating notes, chart values, environment
+        variable documentation and CI step names that describe the behaviour
+        the change moved.
+      - The pull request description: every behaviour it claims, every
+        guarantee it offers, every "this makes X work" and "Y is unaffected".
+      - Test names, harness names and assertion messages that state a property
+        the code under them does not actually check.
+
+      HOW TO SETTLE A CLAIM - the method, not an option
+      For each claim, name its authority: the file or files whose contents
+      decide whether it is true. Then READ THOSE FILES END TO END, first line
+      to last. Do not grep them for a keyword and read the hits. A claim about
+      routing is settled by the whole of the router, a claim about a proxy by
+      the whole of the proxy configuration, a claim about a test by the whole
+      of the test. Keyword search is exactly how this class of defect is
+      missed: the line that contradicts a claim almost never contains the
+      claim's words. Search may FIND a candidate authority file; it may never
+      decide a claim.
+
+      WHAT ELSE REMAINS IN SCOPE
+      The bullets and the method above are a floor, not the job. They name the
+      claim surfaces already known to hide defects; they do not bound this
+      lens. Working through them is the start of your work, not the end of it:
+      any other prose in this repository that asserts something about the
+      changed behaviour is yours too, and so is a claim you notice in passing
+      that no bullet named. A claim outside the diff's four files counts the
+      same as one inside them. Finishing the list is not finishing the lens.
+
+      Report the disagreement between prose and code, not the wording. A
+      sentence that is merely vague, awkward or unidiomatic is not a finding;
+      a sentence the code disproves is.
+
+      OUTPUT
+      Write your findings to {{artifact}} and write nothing else to that file.
+      The file must contain VALID JSON and nothing else: no prose, no markdown
+      fence, no comment. It is a JSON array whose every element is an object
+      with exactly these keys:
+        "id"       - string, "lens-claims-N" with N counting from 1
+        "file"     - string, repository-relative path of the file holding the
+                     false claim, or exactly "PULL_REQUEST_DESCRIPTION" when
+                     the claim is in the pull request's description
+        "line"     - integer, the line holding the claim, counted in that file
+                     or, for the description, in the description text
+        "severity" - string, one of "high", "medium", "low"
+        "summary"  - string, one sentence stating the claim and what the code
+                     actually does instead
+        "evidence" - string, the quoted claim together with the quoted code
+                     that disproves it, naming the authority file you read
+      If you find nothing, write exactly [] to that file. Ask no questions.
+      Stop as soon as the file is written.
+    artifact: lens-claims.json
+    check: ["jq", "-e", "type == \"array\" and all(.[]; has(\"id\") and has(\"file\") and has(\"line\") and has(\"severity\") and has(\"summary\") and has(\"evidence\"))", "{{artifact}}"]
+
   - name: verify-correctness
     needs: [lens-correctness]
     prompt: |
@@ -377,11 +470,75 @@ nodes:
     artifact: verify-tests.json
     check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
 
+  - name: verify-claims
+    needs: [lens-claims]
+    prompt: |
+      A reviewer produced findings about pull request glim-sh/cuttle #62
+      ("fix(viewer): keep websocket inside proxy prefix"), each claiming that
+      some prose - a comment, a document, a name, or the pull request's own
+      description - asserts something the code does not do. Reviewer findings
+      are frequently wrong. Your job is to re-derive every one of them from the
+      actual code and rule on it. Believe a finding for what it points at,
+      never because the reviewer asserted it.
+
+      MATERIALS
+      - The reviewer's findings, a JSON array: {{artifact:lens-claims}}
+      - The unified diff of the pull request: {{input:diff}}
+      - The pull request's description: {{input:pr_body}}
+      - The repository, checked out at the pull request's head commit
+        8fd8af8f96ca8f5cba5975c9228f2cb5e252c6e3:
+        /home/tenequm/pjv/glim-sh/cuttle
+        READ ONLY. Never write, create, delete, move, rename, stage, commit,
+        checkout or otherwise modify anything under that directory, and never
+        run a command that would. Read files and search them; that is all.
+
+      METHOD
+      For each finding, in order:
+      1. Read the claim where it actually lives: the file the finding names in
+         the checkout, or the description when the file is
+         "PULL_REQUEST_DESCRIPTION". The reviewer's quotation may be
+         paraphrased, mislocated or invented - the source is the authority. If
+         the claim is not there as quoted, the verdict is "rejected".
+      2. Settle the claim yourself. Name the file whose contents decide it and
+         READ THAT FILE END TO END, first line to last; do not grep it for the
+         claim's words and read the hits, because the line that disproves a
+         claim rarely contains them. Then decide what the code actually does
+         and whether the claim survives it. A claim the code supports, or one
+         that is imprecise without being false, is "rejected". A claim the code
+         disproves is "confirmed"; if it is false for a different reason than
+         the reviewer gave, correct the summary and confirm it.
+      3. Record the exact evidence you read: the file and line you verified at,
+         and the actual content of that line copied verbatim from the file.
+      Keep the reviewer's id, and keep every finding - reject, never drop. If
+      the reviewer's file or line does not exist, the verdict is "rejected" and
+      the evidence says so.
+
+      OUTPUT
+      Write to {{artifact}} and write nothing else to that file. The file must
+      contain VALID JSON and nothing else: no prose, no markdown fence, no
+      comment. It is a JSON array with one element per reviewer finding, in the
+      reviewer's order, each an object with exactly these keys:
+        "id"                 - string, the reviewer's id, unchanged
+        "file"               - string, repository-relative path, or
+                               "PULL_REQUEST_DESCRIPTION"
+        "line"               - integer
+        "severity"           - string, one of "high", "medium", "low"; correct
+                               the reviewer's if your reading disagrees
+        "summary"            - string, one sentence; corrected if needed
+        "verdict"            - string, "confirmed" or "rejected"
+        "verified_evidence"  - string, "<file>:<line>: <the actual content of
+                               that line, copied from the file>", plus one
+                               sentence saying what that line proves
+      If the reviewer's array was empty, write exactly [] to that file. Ask no
+      questions. Stop as soon as the file is written.
+    artifact: verify-claims.json
+    check: ["jq", "-e", "type == \"array\" and all(.[]; (.verdict == \"confirmed\" or .verdict == \"rejected\") and (.verified_evidence | type == \"string\") and has(\"id\"))", "{{artifact}}"]
+
   - name: reconcile
-    needs: [verify-correctness, verify-callpaths, verify-tests]
+    needs: [verify-correctness, verify-callpaths, verify-tests, verify-claims]
     timeout_seconds: 300
     prompt: |
-      Three verified finding sets about pull request glim-sh/cuttle #62
+      Four verified finding sets about pull request glim-sh/cuttle #62
       ("fix(viewer): keep websocket inside proxy prefix") must be merged into one
       ledger. Nothing may be dropped and nothing may be counted twice.
 
@@ -389,11 +546,12 @@ nodes:
       - {{artifact:verify-correctness}}
       - {{artifact:verify-callpaths}}
       - {{artifact:verify-tests}}
-      Each is a JSON array of verified findings. Read all three in full. You do
+      - {{artifact:verify-claims}}
+      Each is a JSON array of verified findings. Read all four in full. You do
       not need the repository for this step; do not modify anything anywhere.
 
       METHOD
-      1. Take the union of all elements of all three arrays. Every id that
+      1. Take the union of all elements of all four arrays. Every id that
          appears in any input must appear in your output exactly once. Do not
          invent a finding that is in none of them.
       2. Two findings are duplicates when they point at the same defect, even if
@@ -413,9 +571,11 @@ nodes:
       comment. It is a JSON array, each element an object with exactly these
       keys:
         "id"                 - string, the finding's original id
-        "lens"               - string, "lens-correctness", "lens-callpaths" or
-                               "lens-tests", the lens the id came from
-        "file"               - string, repository-relative path
+        "lens"               - string, "lens-correctness", "lens-callpaths",
+                               "lens-tests" or "lens-claims", the lens the id
+                               came from
+        "file"               - string, repository-relative path, or
+                               "PULL_REQUEST_DESCRIPTION"
         "line"               - integer
         "severity"           - string, one of "high", "medium", "low"
         "summary"            - string, one sentence
@@ -423,7 +583,7 @@ nodes:
         "disposition"        - string, "confirmed", "rejected" or "duplicate"
         "duplicate_of"       - string, present only when disposition is
                                "duplicate", holding the surviving finding's id
-      If all three inputs were empty, write exactly [] to that file. Ask no
+      If all four inputs were empty, write exactly [] to that file. Ask no
       questions. Stop as soon as the file is written.
     artifact: ledger.json
     check: ["jq", "-e", "type == \"array\" and all(.[]; (.disposition == \"confirmed\" or .disposition == \"rejected\" or .disposition == \"duplicate\") and (.disposition != \"duplicate\" or has(\"duplicate_of\")) and has(\"id\"))", "{{artifact}}"]
