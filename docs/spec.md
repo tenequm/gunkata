@@ -119,7 +119,9 @@ credential-free operation.
 The run dir holds `record.json` (the verdict), `gunkata.log` (the engine's log, JSON
 lines; the same events go to stderr as text), and per job under `jobs/<job>/`:
 `executor.jsonl` (acpx's ACP event stream, verbatim), `executor.log` (acpx's stderr) and
-`steps.log` (pre- and post-step output). The log names MCP servers and measures the
+`steps.log` (pre- and post-step output). A job's working directory is `home/work`, inside
+its executor's HOME: Claude Code searches the cwd's ancestors for skills up to HOME, so a
+work dir outside it would reach the operator's real home. The log names MCP servers and measures the
 prompt; it never holds expanded MCP URLs, environment values or the prompt text.
 
 ## Principles

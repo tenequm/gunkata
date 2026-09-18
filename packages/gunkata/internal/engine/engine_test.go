@@ -252,8 +252,8 @@ func TestRunPassesAVerifiedDAG(t *testing.T) {
 		t.Error("the kata was not copied into the run dir")
 	}
 
-	if exists(filepath.Join(res.RunDir, jobsDir, "check", homeDir)) {
-		t.Error("a deterministic job got an executor home")
+	if entries, _ := os.ReadDir(filepath.Join(res.RunDir, jobsDir, "check", homeDir)); len(entries) != 1 || entries[0].Name() != workDir {
+		t.Error("a deterministic job's home holds more than its work dir")
 	}
 
 	assertExecutorOutput(t, filepath.Join(res.RunDir, jobsDir, "derive"))
@@ -474,7 +474,7 @@ func assertArgv(t *testing.T, runDir, home string) {
 
 	argv := strings.Split(strings.TrimRight(readFile(t, filepath.Join(home, "argv.txt")), newline), newline)
 	want := []string{
-		"--cwd", filepath.Join(runDir, jobsDir, "produce", workDir),
+		"--cwd", filepath.Join(home, workDir),
 		"--model", "stub-model",
 		"--timeout", "7",
 		"--approve-all",

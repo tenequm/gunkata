@@ -163,8 +163,10 @@ func (l *layout) home(name string) string {
 	return filepath.Join(l.jobDir(name), homeDir)
 }
 
+// work sits inside home: Claude Code searches ancestors of its cwd for
+// skills and stops at HOME, so beside it the search would reach the real one.
 func (l *layout) work(name string) string {
-	return filepath.Join(l.jobDir(name), workDir)
+	return filepath.Join(l.home(name), workDir)
 }
 
 // ensureJob creates the job's output and working directories. A job that
