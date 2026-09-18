@@ -73,7 +73,7 @@ There are exactly two gate verbs, and nothing else needs to be guessed at:
 
 Run both from a shell that has the pinned toolchain, or prefix with `nix develop -c`: a gate
 inherits the caller's environment, and one cached before a `flake.nix` change fails with a
-bare exit 127. `just corpus` is in neither gate - it spends real model quota.
+bare exit 127.
 
 `nix develop` provides the pinned toolchain plus pond; acpx and the executor CLIs are
 host-provided and the shell reports their versions on entry.
