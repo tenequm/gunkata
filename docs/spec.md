@@ -44,6 +44,8 @@ HOME, nothing inherited but subscription auth - and every addition is declared.
 
 - `harness:` - the acpx agent that runs the job, e.g. `claude`. `agy` is Google
   Antigravity, which acpx 0.17 lacks: it runs the host's `agy-acp-server` on PATH.
+  `codex` starts in its adapter's full-access mode, as other harnesses run unsandboxed;
+  `options: {mode: <mode>}` picks another.
 - `skills:` - each entry is a skill directory: a local path, or a GitHub tree URL
   (`https://github.com/<o>/<r>/tree/<ref>/<path>`). The engine fetches it engine-side with
   ambient credentials, resolves the ref to a SHA at run start, snapshots it into the run

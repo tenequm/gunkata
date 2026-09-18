@@ -648,6 +648,58 @@ func assertLinks(t *testing.T, realHome, home string, want ...string) {
 	}
 }
 
+// TestRunStartsCodexBare holds what Codex needs beyond the shared contract:
+// its secret-free config written into the executor's HOME, the declared
+// skill where Codex loads user skills, full access set, only its own
+// credentials linked.
+func TestRunStartsCodexBare(t *testing.T) {
+	stubACPX(t)
+
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+
+	for _, rel := range []string{".codex/auth.json", ".codex/config.toml", ".agents/skills/host-skill/SKILL.md", ".claude/.credentials.json"} {
+		writeFile(t, filepath.Join(realHome, rel), "host")
+	}
+
+	kataDir := t.TempDir()
+	writeFile(t, filepath.Join(kataDir, "skills", "local-skill", "SKILL.md"), "skill")
+
+	kataPath := writeFile(t, filepath.Join(kataDir, "k.kata.yml"), `
+name: stub-codex
+agents:
+  stub: {harness: codex, model: m, skills: [./skills/local-skill]}
+workflow:
+  produce:
+    agent: stub
+    prompt: |
+      ACTION=write
+      TARGET={{output:out.txt}}
+    outputs: [out.txt]
+`)
+
+	res, err := Run(context.Background(), Options{KataPath: kataPath, RunsRoot: filepath.Join(t.TempDir(), "runs")})
+	if err != nil || res.Outcome != OutcomeSucceeded {
+		t.Fatalf("Run() = %+v, %v", res, err)
+	}
+
+	home := filepath.Join(res.RunDir, jobsDir, "produce", homeDir)
+
+	if got := readFile(t, filepath.Join(home, ".codex", "config.toml")); got != codexConfig {
+		t.Errorf("codex config = %q, want the engine's own", got)
+	}
+
+	if readFile(t, filepath.Join(home, ".agents", "skills", "local-skill", "SKILL.md")) != "skill" || exists(filepath.Join(home, ".agents", "skills", "host-skill")) {
+		t.Error("the codex skills dir does not hold exactly the declared skill")
+	}
+
+	assertLinks(t, realHome, home, ".codex/auth.json")
+
+	if !strings.Contains(readFile(t, filepath.Join(home, "env.txt")), "INITIAL_AGENT_MODE=agent-full-access\n") {
+		t.Error("the codex executor does not start in full access")
+	}
+}
+
 func TestRunTimeoutKillsTheProcessGroup(t *testing.T) {
 	stubACPX(t)
 
@@ -775,7 +827,7 @@ func TestRunRejectsBeforeRunning(t *testing.T) {
 		"unbound param":    {"name: k\nparams:\n  p: {}\nworkflow:\n  j: {outputs: [o]}\n", nil, errUnboundParam},
 		"undeclared param": {"name: k\nworkflow:\n  j: {outputs: [o]}\n", map[string]string{"q": "1"}, errUnknownParam},
 		"unset MCP var":    {"name: k\nagents:\n  a: {harness: claude, model: m, mcps: [{url: \"https://x/${" + mcpVarName + "}\", required: true}]}\n" + job, nil, errMCPVar},
-		"skills on codex":  {"name: k\nagents:\n  a: {harness: codex, model: m, skills: [./s]}\n" + job, nil, errSkillDirs},
+		"skills on pi":     {"name: k\nagents:\n  a: {harness: pi, model: m, skills: [./s]}\n" + job, nil, errSkillDirs},
 		"bad skill URL":    {"name: k\nagents:\n  a: {harness: claude, model: m, skills: [\"https://github.com/o/r\"]}\n" + job, nil, errSkillURL},
 	}
 

@@ -43,7 +43,8 @@ var harnessSkillDirs = map[string]string{
 	// The Gemini home's global skills. agy also reads
 	// .gemini/antigravity-cli/skills, and .gemini/skills and .agents/skills
 	// under its cwd - none of them present in a bare HOME.
-	harnessAgy: ".gemini/config/skills",
+	harnessAgy:   ".gemini/config/skills",
+	harnessCodex: ".agents/skills",
 }
 
 // treeURL is a parsed GitHub tree URL.

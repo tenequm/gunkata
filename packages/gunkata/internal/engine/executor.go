@@ -33,6 +33,7 @@ const (
 	acpxBin       = "acpx"
 	harnessClaude = "claude"
 	harnessAgy    = "agy"
+	harnessCodex  = "codex"
 	// waitDelay bounds the wait after a kill, so no run hangs on teardown.
 	waitDelay = 5 * time.Second
 	exitOK    = 0
@@ -69,15 +70,20 @@ const (
 )
 
 // inherited is the whitelist that crosses the executor boundary. Skills,
-// agent instruction files, MCP config and everything else stay outside.
-var inherited = []string{"PATH", "LANG", "LC_ALL", "USER", "LOGNAME"}
+// agent instruction files, MCP config and everything else stay outside. On
+// NixOS the last one tells a shell its environment is already set up;
+// without it a harness whose shell is the login shell, such as Codex's zsh,
+// rebuilds PATH from the executor's HOME and loses the inherited one.
+var inherited = []string{
+	"PATH", "LANG", "LC_ALL", "USER", "LOGNAME", "__NIXOS_SET_ENVIRONMENT_DONE",
+}
 
 // harnessAuth is the subscription credentials one harness inherits, the sole
 // inheritance the executor contract allows, as paths that hold the same place
 // under the real home and under the executor's.
 var harnessAuth = map[string][]string{
 	harnessClaude: {".claude/.credentials.json"},
-	"codex":       {".codex/auth.json"},
+	harnessCodex:  {".codex/auth.json"},
 	// pi reads its provider list, and the key with it, from this one file.
 	"pi": {".pi/agent/models.json"},
 	// settings.json selects the Google-account login; the lib dir is the ACP
@@ -99,8 +105,12 @@ var harnessAgent = map[string][]string{
 // harnessEnv is what a harness needs set to start bare. Claude Code would
 // otherwise load the claude.ai connectors tied to the subscription login,
 // ancestor CLAUDE.md files, its bundled skills and auto memory; acpx would
-// skip the user scope, where the job's skills are copied.
+// skip the user scope, where the job's skills are copied. The Codex adapter
+// would otherwise start in its sandbox with the network off, which cuts the
+// inherited GitHub access, and send actions to its reviewer model; a kata
+// picks another mode with options: {mode: ...}.
 var harnessEnv = map[string][]string{
+	harnessCodex: {"INITIAL_AGENT_MODE=agent-full-access"},
 	harnessClaude: {
 		"ACPX_CLAUDE_INCLUDE_USER_SETTINGS=1",
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false",
@@ -111,6 +121,33 @@ var harnessEnv = map[string][]string{
 		"DISABLE_AUTOUPDATER=1",
 	},
 }
+
+// harnessFiles is config a harness needs written into its HOME to start bare,
+// keyed by path under that HOME. It never holds secrets.
+var harnessFiles = map[string]map[string]string{
+	harnessCodex: {".codex/config.toml": codexConfig},
+}
+
+// codexConfig keeps Codex bare. Without it Codex would load the connectors
+// and plugins tied to the subscription login, install its bundled system
+// skills, read a cwd AGENTS.md, walk from the cwd up to the nearest .git for
+// .agents/skills - out of the job's HOME whenever the runs root sits in a
+// repository - and look for MCP OAuth tokens in the host's keyring. The zero
+// grace makes Codex wait for the declared MCP servers, which it would
+// otherwise leave out of the model's tools.
+const codexConfig = `project_doc_max_bytes = 0
+project_root_markers = []
+mcp_optional_startup_grace_ms = 0
+mcp_oauth_credentials_store = "file"
+
+[features]
+apps = false
+plugins = false
+remote_plugin = false
+
+[skills.bundled]
+enabled = false
+`
 
 // githubAuth is the host's own gh and git access, inherited by every harness:
 // a gh login on a workstation, or a credential-injecting gateway (.onecli)
@@ -459,14 +496,11 @@ func executorEnv(home string) []string {
 }
 
 // prepareHome builds the executor's directories, links in the credentials
-// its harness needs and the host's GitHub access, and copies in its skills.
+// its harness needs and the host's GitHub access, writes the harness's own
+// config, and copies in its skills.
 func prepareHome(spec execSpec) error {
-	dirs := []string{tmpDir, xdgConfigDir, xdgDataDir, xdgStateDir, xdgCacheDir}
-	for _, dir := range dirs {
-		err := os.MkdirAll(filepath.Join(spec.home, dir), dirPerm)
-		if err != nil {
-			return fmt.Errorf("create executor dir: %w", err)
-		}
+	if err := makeExecutorDirs(spec.home); err != nil {
+		return err
 	}
 
 	realHome, err := os.UserHomeDir()
@@ -481,7 +515,38 @@ func prepareHome(spec execSpec) error {
 		}
 	}
 
+	if err := writeHarnessFiles(spec.home, spec.harness); err != nil {
+		return err
+	}
+
 	return materializeSkills(spec.home, spec.harness, spec.skills)
+}
+
+func makeExecutorDirs(home string) error {
+	dirs := []string{tmpDir, xdgConfigDir, xdgDataDir, xdgStateDir, xdgCacheDir}
+	for _, dir := range dirs {
+		err := os.MkdirAll(filepath.Join(home, dir), dirPerm)
+		if err != nil {
+			return fmt.Errorf("create executor dir: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func writeHarnessFiles(home, harness string) error {
+	for rel, body := range harnessFiles[harness] {
+		path := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+			return fmt.Errorf("create harness config dir: %w", err)
+		}
+
+		if err := os.WriteFile(path, []byte(body), filePerm); err != nil {
+			return fmt.Errorf("write harness config: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // credentialPaths is everything prepareHome links in for a harness.
