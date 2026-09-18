@@ -30,6 +30,7 @@ Enter through this listing and open only what the task needs.
 
 # Decisions
 
+* [Graph schema v2: CI-shaped workflow files](decisions/2609-18-graph-schema-v2-ci-shaped-workflow-files.md) - Rework the graph YAML toward CI-workflow shape with gunkata's own semantics - agent profiles, a workflow job map, plural namespaced outputs with post-step checks, invocation params - plus the CI lessons worth borrowing and the anti-lessons that stay out.
 * [A run ends when its process tree is dead](decisions/a-run-ends-when-its-process-tree-is-dead.md) - Teardown is part of the run contract; the engine owns the full process tree via process groups.
 * [Completion is verified, never claimed](decisions/completion-is-verified-never-claimed.md) - A task is done when its named evidence artifact exists and passes its check; dependents release only after verification.
 * [Cost is observability, never control flow](decisions/cost-is-observability-never-control-flow.md) - Dollar amounts are recorded and reported but no bound in the engine may read one.
