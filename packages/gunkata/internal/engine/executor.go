@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/url"
 	"os"
@@ -111,12 +112,15 @@ type execSpec struct {
 	timeout time.Duration
 	home    string
 	work    string
-	logPath string
+	jobDir  string // holds the executor's stream and stderr
+	log     *slog.Logger
 }
 
 // runExecutor starts acpx bare - whitelisted environment, engine-owned HOME,
 // its own process group - and reports its exit code. A non-zero code is an
-// answer, not an error; an error means the executor never ran.
+// answer, not an error; an error means the executor never ran. Its stdout,
+// the ACP event stream, is kept verbatim and summarised into the log as it
+// arrives.
 func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 	bin, err := exec.LookPath(acpxBin)
 	if err != nil {
@@ -132,31 +136,90 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 		return noExit, err
 	}
 
-	logFile, err := openLog(spec.logPath)
+	feed, err := openLog(filepath.Join(spec.jobDir, executorFeed))
 	if err != nil {
 		return noExit, err
 	}
-	defer logFile.Close()
+	defer feed.Close()
+
+	stderr, err := openLog(filepath.Join(spec.jobDir, executorLog))
+	if err != nil {
+		return noExit, err
+	}
+	defer stderr.Close()
 
 	cmdCtx, cancel := context.WithTimeout(ctx, spec.timeout+killGrace)
 	defer cancel()
 
+	events := &eventStream{log: spec.log, tools: map[string]*toolCall{}}
+	cmd := executorCmd(cmdCtx, bin, spec, mcpConfig)
+	// The file comes first: a line is on disk before it is parsed.
+	cmd.Stdout = io.MultiWriter(feed, events)
+	cmd.Stderr = stderr
+
+	return superviseExecutor(cmdCtx, cmd, spec, events)
+}
+
+func executorCmd(
+	ctx context.Context, bin string, spec execSpec, mcpConfig []byte,
+) *exec.Cmd {
 	var mcpFlags []string
 	if mcpConfig != nil {
 		mcpFlags = []string{"--mcp-config", mcpStdin}
 	}
 
-	cmd := exec.CommandContext(cmdCtx, bin, acpxArgs(spec, mcpFlags)...)
+	//nolint:gosec // G204: bin is acpx on PATH; the args are the kata's
+	cmd := exec.CommandContext(ctx, bin, acpxArgs(spec, mcpFlags)...)
 	cmd.Dir = spec.work
 	cmd.Env = append(executorEnv(spec.home), harnessEnv[spec.harness]...)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
 
 	if mcpConfig != nil {
 		cmd.Stdin = bytes.NewReader(mcpConfig)
 	}
 
-	return runGrouped(cmd)
+	return cmd
+}
+
+// superviseExecutor runs the executor to its end and logs its lifecycle. The
+// prompt is logged by length and MCP servers by name, since the text and the
+// expanded URLs may carry secrets.
+func superviseExecutor(
+	ctx context.Context, cmd *exec.Cmd, spec execSpec, events *eventStream,
+) (int, error) {
+	began := time.Now()
+
+	if err := startGrouped(cmd); err != nil {
+		return noExit, err
+	}
+
+	spec.log.Info("executor start", "harness", spec.harness,
+		"model", spec.model, "pid", cmd.Process.Pid,
+		"timeout_s", int(spec.timeout.Seconds()),
+		"mcps", mapped(spec.mcps, mcpName),
+		"skills", mapped(spec.skills, filepath.Base),
+		"prompt_len", len(spec.prompt))
+
+	code, err := waitGrouped(cmd)
+
+	events.flush()
+
+	if ctx.Err() != nil {
+		spec.log.Warn("executor killed", "reason", ctx.Err().Error())
+	}
+
+	spec.log.Log(ctx, levelFor[err == nil && code == exitOK],
+		"executor exit", keyExit, code, durSince(began))
+
+	return code, err
+}
+
+func mapped(in []string, fn func(string) string) []string {
+	out := make([]string, emptyLen, len(in))
+	for _, s := range in {
+		out = append(out, fn(s))
+	}
+
+	return out
 }
 
 func openLog(path string) (*os.File, error) {
@@ -195,14 +258,26 @@ func runStep(
 // a cancelled run takes the whole tree down with it. An exit code of -1 means
 // the engine, or a signal, killed it.
 func runGrouped(cmd *exec.Cmd) (int, error) {
+	if err := startGrouped(cmd); err != nil {
+		return noExit, err
+	}
+
+	return waitGrouped(cmd)
+}
+
+func startGrouped(cmd *exec.Cmd) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = waitDelay
 	cmd.Cancel = func() error { return killGroup(cmd.Process) }
 
 	if err := cmd.Start(); err != nil {
-		return noExit, fmt.Errorf("start %s: %w", cmd.Path, err)
+		return fmt.Errorf("start %s: %w", cmd.Path, err)
 	}
 
+	return nil
+}
+
+func waitGrouped(cmd *exec.Cmd) (int, error) {
 	waitErr := cmd.Wait()
 
 	// The child is reaped; sweep anything it left behind in the group.
@@ -236,7 +311,7 @@ func acpxArgs(spec execSpec, mcpFlags []string) []string {
 		"--model", spec.model,
 		"--timeout", strconv.Itoa(int(spec.timeout.Seconds())),
 		"--approve-all",
-		"--format", "quiet",
+		"--format", "json", "--json-strict",
 	}
 
 	args = append(args, mcpFlags...)
@@ -400,4 +475,199 @@ func link(src, dst string) error {
 	}
 
 	return nil
+}
+
+// ACP names the event stream is summarised by. Everything else - message and
+// thought chunks, command lists, session info - stays in the stream only.
+const (
+	methodUpdate     = "session/update"
+	methodPermission = "session/request_permission"
+	updateTool       = "tool_call"
+	updateToolUpdate = "tool_call_update"
+	updateUsage      = "usage_update"
+	toolCompleted    = "completed"
+	toolFailed       = "failed"
+)
+
+var lineEnd = []byte{'\n'}
+
+// acpMessage is the part of one ACP JSON-RPC message the log summarises.
+type acpMessage struct {
+	Method string    `json:"method"`
+	Params acpParams `json:"params"`
+	Result acpResult `json:"result"`
+}
+
+type acpParams struct {
+	Update   acpUpdate `json:"update"`
+	ToolCall acpTool   `json:"toolCall"`
+}
+
+type acpResult struct {
+	StopReason string           `json:"stopReason"`
+	Usage      map[string]int64 `json:"usage"`
+}
+
+type acpUpdate struct {
+	acpTool
+
+	SessionUpdate string   `json:"sessionUpdate"`
+	Status        *string  `json:"status"`
+	Cost          *acpCost `json:"cost"`
+}
+
+// acpTool is a tool call as updates carry it: any field but the id may be
+// null, and a later update fills in what an earlier one lacked.
+type acpTool struct {
+	ID    string  `json:"toolCallId"`
+	Title *string `json:"title"`
+	Kind  *string `json:"kind"`
+}
+
+type acpCost struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
+// toolCall is what the stream has told so far about one tool call.
+type toolCall struct {
+	title, kind string
+	began       time.Time
+}
+
+// eventStream splits the executor's stdout into lines and logs the events
+// worth watching. It only reads what passes through and never fails a write,
+// so a line it cannot parse never cuts the stream on disk short.
+type eventStream struct {
+	log     *slog.Logger
+	partial []byte
+	tools   map[string]*toolCall
+	cost    *acpCost
+	garbled bool // a line that is not JSON has been warned about
+}
+
+func (e *eventStream) Write(p []byte) (int, error) {
+	e.partial = append(e.partial, p...)
+
+	for {
+		line, rest, found := bytes.Cut(e.partial, lineEnd)
+		if !found {
+			return len(p), nil
+		}
+
+		e.handle(line)
+		e.partial = rest
+	}
+}
+
+// flush handles a last line the executor did not terminate.
+func (e *eventStream) flush() {
+	e.handle(e.partial)
+	e.partial = nil
+}
+
+func (e *eventStream) handle(line []byte) {
+	if len(bytes.TrimSpace(line)) == emptyLen {
+		return
+	}
+
+	var msg acpMessage
+
+	// A field of an unexpected type is still JSON; skip it, not the line.
+	var typeErr *json.UnmarshalTypeError
+	if err := json.Unmarshal(line, &msg); err != nil &&
+		!errors.As(err, &typeErr) {
+		e.warnGarbled(err)
+
+		return
+	}
+
+	switch {
+	case msg.Method == methodUpdate:
+		e.update(msg.Params.Update)
+	case msg.Method == methodPermission:
+		tool := msg.Params.ToolCall
+		e.log.Info("permission request", keyTool, tool.ID,
+			keyTitle, deref(tool.Title), keyKind, deref(tool.Kind))
+	case msg.Result.StopReason != unset:
+		e.turnEnd(msg.Result)
+	default: // the rest stays in the stream only
+	}
+}
+
+// warnGarbled warns once per executor, however many lines are not JSON.
+func (e *eventStream) warnGarbled(err error) {
+	if e.garbled {
+		return
+	}
+
+	e.garbled = true
+	e.log.Warn("executor stream has a line that is not JSON", keyErr, err)
+}
+
+func (e *eventStream) update(u acpUpdate) {
+	switch u.SessionUpdate {
+	case updateTool:
+		t := e.track(u)
+		e.log.Info("tool start", keyTool, u.ID, keyTitle, t.title,
+			keyKind, t.kind)
+		e.maybeEnd(u, t)
+	case updateToolUpdate:
+		e.maybeEnd(u, e.track(u))
+	case updateUsage:
+		if u.Cost != nil {
+			e.cost = u.Cost
+		}
+	default: // chunks and session notices stay in the stream only
+	}
+}
+
+// track folds an update into what is known of its tool call, keeping the
+// latest title and kind that were not null.
+func (e *eventStream) track(u acpUpdate) *toolCall {
+	t, ok := e.tools[u.ID]
+	if !ok {
+		t = &toolCall{began: time.Now()}
+		e.tools[u.ID] = t
+	}
+
+	if u.Title != nil {
+		t.title = *u.Title
+	}
+
+	if u.Kind != nil {
+		t.kind = *u.Kind
+	}
+
+	return t
+}
+
+func (e *eventStream) maybeEnd(u acpUpdate, t *toolCall) {
+	status := deref(u.Status)
+	if status != toolCompleted && status != toolFailed {
+		return
+	}
+
+	delete(e.tools, u.ID)
+	e.log.Log(context.Background(), levelFor[status == toolCompleted],
+		"tool end", keyTool, u.ID, keyTitle, t.title, keyKind, t.kind,
+		"status", status, durSince(t.began))
+}
+
+func (e *eventStream) turnEnd(r acpResult) {
+	attrs := []any{"stop_reason", r.StopReason, "usage", r.Usage}
+	if e.cost != nil {
+		attrs = append(attrs,
+			"cost", e.cost.Amount, "currency", e.cost.Currency)
+	}
+
+	e.log.Info("turn end", attrs...)
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return unset
+	}
+
+	return *s
 }

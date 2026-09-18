@@ -29,9 +29,25 @@ const (
 	mcpVarName = "GUNKATA_TEST_MCP_KEY"
 )
 
+// stubStream is what the stub prints on stdout: an ACP event stream as acpx
+// --format json emits it, with a chatty chunk the log must leave out and two
+// lines that are not JSON, which must cost one warning.
+const stubStream = `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"toolu_1","title":"Terminal","kind":"execute","status":"pending"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_1","title":"ls -la","kind":"execute","status":null}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"pondering"}}}}
+{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"toolu_1","title":"ls -la","kind":"execute"}}}
+not json
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_1","title":null,"kind":null,"status":"completed","rawOutput":"ok"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","used":100,"size":200000,"cost":{"amount":0.01,"currency":"USD"}}}}
+also not json
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":18,"outputTokens":719,"totalTokens":737}}}
+`
+
 // stubScript is a test double for acpx: no test involves a model. It records
-// its argv, environment and stdin in the engine-owned HOME it was given, then
-// acts on the directives the test kata wrote into the prompt.
+// its argv, environment and stdin in the engine-owned HOME it was given,
+// prints stubStream and a stderr marker, then acts on the directives the test
+// kata wrote into the prompt.
 const stubScript = `#!/usr/bin/env bash
 set -u
 
@@ -39,7 +55,9 @@ prompt="${@: -1}"
 printf '%s\n' "$@" > "$HOME/argv.txt"
 env | sort > "$HOME/env.txt"
 if [[ " $* " == *" --mcp-config "* ]]; then cat > "$HOME/mcp.json"; fi
-echo "stub acpx stdout marker"
+cat <<'JSONL'
+` + stubStream + `JSONL
+echo "stub acpx stderr marker" >&2
 
 field() {
   printf '%s\n' "$prompt" | sed -n "s/^$1=//p" | head -n 1
@@ -237,6 +255,78 @@ func TestRunPassesAVerifiedDAG(t *testing.T) {
 	if exists(filepath.Join(res.RunDir, jobsDir, "check", homeDir)) {
 		t.Error("a deterministic job got an executor home")
 	}
+
+	assertExecutorOutput(t, filepath.Join(res.RunDir, jobsDir, "derive"))
+	assertRunLog(t, res.RunDir)
+}
+
+// assertExecutorOutput holds that the event stream is kept verbatim and
+// stderr apart from it.
+func assertExecutorOutput(t *testing.T, jobDir string) {
+	t.Helper()
+
+	if got := readFile(t, filepath.Join(jobDir, executorFeed)); got != stubStream {
+		t.Errorf("%s = %q, want the stub's stdout verbatim", executorFeed, got)
+	}
+
+	if got := readFile(t, filepath.Join(jobDir, executorLog)); got != "stub acpx stderr marker\n" {
+		t.Errorf("%s = %q, want the stub's stderr", executorLog, got)
+	}
+}
+
+// assertRunLog holds gunkata.log to JSON lines that carry the lifecycle and
+// the executor events worth watching, and nothing of the chatty chunks.
+func assertRunLog(t *testing.T, runDir string) {
+	t.Helper()
+
+	raw := readFile(t, filepath.Join(runDir, runLog))
+	counts := map[string]int{}
+
+	for line := range strings.SplitSeq(strings.TrimRight(raw, newline), newline) {
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("%s line %q is not JSON: %v", runLog, line, err)
+		}
+
+		counts[logKey(event)]++
+	}
+
+	for _, want := range []string{
+		"run start", "run end", "record written",
+		"job start derive", "job end derive done", "job end check done",
+		"step fetch pre-step", "step derive post-step",
+		"output derive out.txt",
+		"executor start derive", "executor exit derive",
+		"tool start derive execute Terminal",
+		"tool end derive execute ls -la completed",
+		"permission request derive execute ls -la",
+		"turn end derive end_turn",
+	} {
+		if counts[want] != 1 {
+			t.Errorf("%s has %d %q events, want 1:\n%s", runLog, counts[want], want, raw)
+		}
+	}
+
+	if got := counts["executor stream has a line that is not JSON derive"]; got != 1 {
+		t.Errorf("%s warned %d times about lines that are not JSON, want once", runLog, got)
+	}
+
+	if strings.Contains(raw, "pondering") {
+		t.Errorf("%s logged a thought chunk", runLog)
+	}
+}
+
+// logKey names an event by its message and the attrs that tell it apart.
+func logKey(event map[string]any) string {
+	parts := []string{event["msg"].(string)}
+
+	for _, key := range []string{keyJob, keyState, keyKind, "output", keyTitle, "status", "stop_reason"} {
+		if value, ok := event[key].(string); ok && value != unset {
+			parts = append(parts, value)
+		}
+	}
+
+	return strings.Join(parts, " ")
 }
 
 func TestRunParksAndHoldsDependents(t *testing.T) {
@@ -372,8 +462,10 @@ workflow:
 		t.Errorf("mcp config = %s, want the expanded server", mcp)
 	}
 
-	if strings.Contains(readFile(t, filepath.Join(res.RunDir, recordName)), mcpSecret) {
-		t.Error("the expanded MCP secret reached the record")
+	for _, name := range []string{recordName, runLog} {
+		if strings.Contains(readFile(t, filepath.Join(res.RunDir, name)), mcpSecret) {
+			t.Errorf("the expanded MCP secret reached %s", name)
+		}
 	}
 }
 
@@ -386,7 +478,7 @@ func assertArgv(t *testing.T, runDir, home string) {
 		"--model", "stub-model",
 		"--timeout", "7",
 		"--approve-all",
-		"--format", "quiet",
+		"--format", "json", "--json-strict",
 		"--mcp-config", mcpStdin,
 		"claude", "exec",
 		"--config-option", "a=b",
@@ -576,7 +668,7 @@ workflow:
 		t.Error("the skipped server reached acpx")
 	}
 
-	want := "warning: job j: skipping MCP example: " + mcpVarName + " is unset"
+	want := `level=WARN msg="skipping MCP: variable unset" job=j server=example var=` + mcpVarName
 	if !strings.Contains(progress.String(), want) {
 		t.Errorf("progress = %q, want %q", progress.String(), want)
 	}

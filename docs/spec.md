@@ -116,6 +116,12 @@ credential-free operation.
 4. Every run is fully isolated: own directories, ports, HOMEs; teardown kills the whole
    process tree.
 
+The run dir holds `record.json` (the verdict), `gunkata.log` (the engine's log, JSON
+lines; the same events go to stderr as text), and per job under `jobs/<job>/`:
+`executor.jsonl` (acpx's ACP event stream, verbatim), `executor.log` (acpx's stderr) and
+`steps.log` (pre- and post-step output). The log names MCP servers and measures the
+prompt; it never holds expanded MCP URLs, environment values or the prompt text.
+
 ## Principles
 
 Held here in quarantine until each proves its keep:

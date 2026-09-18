@@ -21,7 +21,9 @@ const (
 	skillsDir    = "skills"
 	homeDir      = "home"
 	workDir      = "work"
-	executorLog  = "executor.log"
+	executorLog  = "executor.log"   // acpx stderr
+	executorFeed = "executor.jsonl" // acpx stdout, the ACP event stream
+	runLog       = "gunkata.log"
 	stepsLog     = "steps.log"
 	recordName   = "record.json"
 	kataName     = "kata.yml"

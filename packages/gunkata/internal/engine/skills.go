@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tenequm/gunkata/internal/kata"
 )
@@ -110,6 +112,7 @@ func checkJobSkills(p *kata.Profile) error {
 // skillFetcher snapshots every declared skill into dst/<dir name> once,
 // resolving each remote ref to a SHA at run start.
 type skillFetcher struct {
+	log     *slog.Logger
 	kataDir string
 	dst     string
 	// snapshots maps each entry to its snapshot dir; sources, for the
@@ -119,10 +122,11 @@ type skillFetcher struct {
 	owner     map[string]string // snapshot dir name -> entry that took it
 }
 
-func fetchSkills(ctx context.Context, k *kata.Kata, dst string) (
-	*skillFetcher, error,
-) {
+func fetchSkills(
+	ctx context.Context, k *kata.Kata, dst string, log *slog.Logger,
+) (*skillFetcher, error) {
 	f := &skillFetcher{
+		log:       log,
 		kataDir:   k.Dir,
 		dst:       dst,
 		snapshots: map[string]string{},
@@ -158,6 +162,8 @@ func (f *skillFetcher) fetchAll(ctx context.Context, entries []string) error {
 }
 
 func (f *skillFetcher) fetch(ctx context.Context, entry string) error {
+	began := time.Now()
+
 	src, err := f.resolve(ctx, entry)
 	if err != nil {
 		return err
@@ -176,6 +182,8 @@ func (f *skillFetcher) fetch(ctx context.Context, entry string) error {
 
 	f.owner[name] = entry
 	f.snapshots[entry], f.sources[entry] = snapshot, src.source
+	f.log.Info("skill fetched", "entry", entry, "source", src.source,
+		durSince(began))
 
 	return nil
 }

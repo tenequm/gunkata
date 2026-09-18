@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,10 +27,26 @@ const (
 	stepNum  = 1 // steps are numbered from one in failures
 )
 
+// Log attribute keys, shared so every event reads the same way.
+const (
+	keyJob   = "job"
+	keyErr   = "err"
+	keyDur   = "dur_ms"
+	keyExit  = "exit"
+	keyState = "state"
+	keyTitle = "title"
+	keyKind  = "kind"
+	keyTool  = "tool"
+)
+
 var (
 	errUnknownParam = errors.New("no such param is declared by the kata")
 	errUnboundParam = errors.New("required param is not bound")
 )
+
+// levelFor maps whether a thing passed to its log level: what did not pass is
+// a warning.
+var levelFor = map[bool]slog.Level{true: slog.LevelInfo, false: slog.LevelWarn}
 
 // Options configures one run.
 type Options struct {
@@ -38,8 +55,9 @@ type Options struct {
 	// Params binds declared params by key. Unbound params take their
 	// default; a required param must be bound.
 	Params map[string]string
-	// Progress receives one human-readable line per job transition. It is
-	// never the run's result; that is the record.
+	// Progress receives the run's log as human-readable text: the events
+	// gunkata.log holds as JSON lines. It is never the run's result; that is
+	// the record.
 	Progress io.Writer
 }
 
@@ -53,18 +71,9 @@ type Result struct {
 // is a Result, not an error; an error means the run could not be carried out
 // at all. Result.RunDir is set as soon as the directory exists.
 func Run(ctx context.Context, opts Options) (Result, error) {
-	k, err := kata.Load(opts.KataPath)
-	if err != nil {
-		return Result{}, fmt.Errorf("load kata: %w", err)
-	}
-
-	bound, err := bindParams(k, opts.Params)
+	k, bound, err := prepare(opts)
 	if err != nil {
 		return Result{}, err
-	}
-
-	if checkErr := preflight(k); checkErr != nil {
-		return Result{}, checkErr
 	}
 
 	l, err := newLayout(opts.RunsRoot)
@@ -74,9 +83,71 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 
 	res := Result{RunDir: l.dir}
 
-	s, err := setup(ctx, k, l, bound, opts)
+	log, logFile, err := openRunLog(l.dir, opts.Progress)
 	if err != nil {
 		return res, err
+	}
+	defer logFile.Close()
+
+	res.Outcome, err = carryOut(ctx, k, l, bound, opts.KataPath, log)
+	if err != nil {
+		log.Error("run failed", keyErr, err)
+	}
+
+	return res, err
+}
+
+// prepare loads the kata and binds its params, rejecting what would fail
+// mid-run before anything is created.
+func prepare(opts Options) (*kata.Kata, map[string]string, error) {
+	k, err := kata.Load(opts.KataPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load kata: %w", err)
+	}
+
+	bound, err := bindParams(k, opts.Params)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if checkErr := preflight(k); checkErr != nil {
+		return nil, nil, checkErr
+	}
+
+	return k, bound, nil
+}
+
+// openRunLog logs the run as JSON lines to gunkata.log in runDir and, when
+// progress is set, as text to progress too.
+func openRunLog(runDir string, progress io.Writer) (
+	*slog.Logger, *os.File, error,
+) {
+	file, err := openLog(filepath.Join(runDir, runLog))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	handler := slog.Handler(slog.NewJSONHandler(file, nil))
+	if progress != nil {
+		handler = slog.NewMultiHandler(handler,
+			slog.NewTextHandler(progress, nil))
+	}
+
+	return slog.New(handler), file, nil
+}
+
+// carryOut runs a prepared kata in its run dir and writes the record.
+func carryOut(
+	ctx context.Context, k *kata.Kata, l *layout, bound map[string]string,
+	kataPath string, log *slog.Logger,
+) (Outcome, error) {
+	began := time.Now()
+	log.Info("run start", "run_id", l.id, "kata", k.Name,
+		"run_dir", l.dir, "params", bound)
+
+	s, err := setup(ctx, k, l, bound, kataPath, log)
+	if err != nil {
+		return unset, err
 	}
 
 	started := time.Now()
@@ -87,16 +158,17 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	rec.Params = bound
 
 	if err := l.writeRecord(rec); err != nil {
-		return res, err
+		return unset, err
 	}
 
-	res.Outcome = rec.Outcome
+	log.Info("record written", "path", filepath.Join(l.dir, recordName))
+	log.Info("run end", "outcome", rec.Outcome, durSince(began))
 
 	if ctx.Err() != nil {
-		return res, fmt.Errorf("run interrupted: %w", ctx.Err())
+		return rec.Outcome, fmt.Errorf("run interrupted: %w", ctx.Err())
 	}
 
-	return res, nil
+	return rec.Outcome, nil
 }
 
 // bindParams holds the bindings to the declared params: none undeclared,
@@ -164,9 +236,9 @@ func checkMCPs(job *kata.Job) error {
 // snapshots, skill snapshots - before any job starts.
 func setup(
 	ctx context.Context, k *kata.Kata, l *layout, bound map[string]string,
-	opts Options,
+	kataPath string, log *slog.Logger,
 ) (*scheduler, error) {
-	if err := l.copyKata(opts.KataPath); err != nil {
+	if err := l.copyKata(kataPath); err != nil {
 		return nil, err
 	}
 
@@ -175,12 +247,12 @@ func setup(
 		return nil, err
 	}
 
-	skills, err := fetchSkills(ctx, k, l.skills())
+	skills, err := fetchSkills(ctx, k, l.skills(), log)
 	if err != nil {
 		return nil, err
 	}
 
-	s := newScheduler(k, l, params, skills.snapshots, opts.Progress)
+	s := newScheduler(k, l, params, skills.snapshots, log)
 	s.skillSources = skills.sources
 
 	return s, nil
@@ -188,12 +260,11 @@ func setup(
 
 // scheduler holds the state of one run in flight.
 type scheduler struct {
-	kata     *kata.Kata
-	layout   *layout
-	params   map[string]string // placeholder values
-	skills   map[string]string // skill entry -> snapshot dir
-	progress io.Writer
-	mu       sync.Mutex // serialises progress writes
+	kata   *kata.Kata
+	layout *layout
+	params map[string]string // placeholder values
+	skills map[string]string // skill entry -> snapshot dir
+	log    *slog.Logger
 	// jobs holds one record per job. Each is written only by that job's own
 	// goroutine, and read by its dependents once it has settled.
 	jobs map[string]*jobRecord
@@ -204,16 +275,16 @@ type scheduler struct {
 
 func newScheduler(
 	k *kata.Kata, l *layout, params, skills map[string]string,
-	progress io.Writer,
+	log *slog.Logger,
 ) *scheduler {
 	s := &scheduler{
-		kata:     k,
-		layout:   l,
-		params:   params,
-		skills:   skills,
-		progress: progress,
-		jobs:     make(map[string]*jobRecord, len(k.Workflow)),
-		settled:  make(map[string]chan struct{}, len(k.Workflow)),
+		kata:    k,
+		layout:  l,
+		params:  params,
+		skills:  skills,
+		log:     log,
+		jobs:    make(map[string]*jobRecord, len(k.Workflow)),
+		settled: make(map[string]chan struct{}, len(k.Workflow)),
 	}
 
 	for name := range k.Workflow {
@@ -244,32 +315,37 @@ func (s *scheduler) execute(ctx context.Context) {
 // runJob waits for the job's needs and, if they were verified, attempts it
 // exactly once.
 func (s *scheduler) runJob(ctx context.Context, job *kata.Job) {
-	if !s.needsDone(ctx, job) {
+	log := s.log.With(keyJob, job.Name)
+	if !s.needsDone(ctx, job, log) {
 		return // stays pending; nothing of it runs and nothing is created
 	}
 
 	rec := s.jobs[job.Name]
-	rec.StartedAt = stampPtr(time.Now())
+	began := time.Now()
+	rec.StartedAt = stampPtr(began)
 
-	s.logf("%s: start", job.Name)
+	log.Info("job start")
 
 	rec.State = stateDone
-	if failure := s.evaluate(ctx, job, rec); failure != unset {
+	if failure := s.evaluate(ctx, job, rec, log); failure != unset {
 		rec.State, rec.Failure = stateParked, failure
 	}
 
 	rec.FinishedAt = stampPtr(time.Now())
 
+	attrs := []any{keyState, rec.State, durSince(began)}
 	if rec.Failure != unset {
-		s.logf("%s: %s (%s)", job.Name, rec.State, rec.Failure)
-	} else {
-		s.logf("%s: %s", job.Name, rec.State)
+		attrs = append(attrs, "failure", rec.Failure)
 	}
+
+	log.Log(ctx, levelFor[rec.State == stateDone], "job end", attrs...)
 }
 
 // needsDone reports whether every job this one needs reached done. A need
 // that parked, or a cancelled run, leaves the job pending.
-func (s *scheduler) needsDone(ctx context.Context, job *kata.Job) bool {
+func (s *scheduler) needsDone(
+	ctx context.Context, job *kata.Job, log *slog.Logger,
+) bool {
 	for _, need := range job.Needs {
 		select {
 		case <-s.settled[need]:
@@ -277,8 +353,8 @@ func (s *scheduler) needsDone(ctx context.Context, job *kata.Job) bool {
 			return false
 		}
 
-		if s.jobs[need].State != stateDone {
-			s.logf("%s: pending, %s did not complete", job.Name, need)
+		if state := s.jobs[need].State; state != stateDone {
+			log.Warn("job pending", "need", need, keyState, state)
 
 			return false
 		}
@@ -291,31 +367,35 @@ func (s *scheduler) needsDone(ctx context.Context, job *kata.Job) bool {
 // outputs, post-steps - and returns the first thing that did not pass, or
 // unset when all did. Nothing an executor reported about itself is consulted.
 func (s *scheduler) evaluate(
-	ctx context.Context, job *kata.Job, rec *jobRecord,
+	ctx context.Context, job *kata.Job, rec *jobRecord, log *slog.Logger,
 ) string {
 	if err := s.layout.ensureJob(job.Name); err != nil {
 		return err.Error()
 	}
 
-	failure := s.runSteps(ctx, job, "pre-step", job.PreSteps)
+	failure := s.runSteps(ctx, job, "pre-step", job.PreSteps, log)
 	if failure == unset {
-		failure = s.runPrompt(ctx, job, rec)
+		failure = s.runPrompt(ctx, job, rec, log)
 	}
 
 	if failure == unset {
-		failure = s.checkOutputs(job)
+		failure = s.checkOutputs(job, log)
 	}
 
 	if failure == unset {
-		failure = s.runSteps(ctx, job, "post-step", job.PostSteps)
+		failure = s.runSteps(ctx, job, "post-step", job.PostSteps, log)
 	}
 
 	return failure
 }
 
-func (s *scheduler) checkOutputs(job *kata.Job) string {
+func (s *scheduler) checkOutputs(job *kata.Job, log *slog.Logger) string {
 	for _, out := range job.Outputs {
-		if !present(filepath.Join(s.layout.artifacts(), job.Name, out)) {
+		ok := present(filepath.Join(s.layout.artifacts(), job.Name, out))
+		log.Log(context.Background(), levelFor[ok], "output",
+			"output", out, "present", ok)
+
+		if !ok {
 			return fmt.Sprintf("output %s is missing or empty", out)
 		}
 	}
@@ -325,6 +405,7 @@ func (s *scheduler) checkOutputs(job *kata.Job) string {
 
 func (s *scheduler) runSteps(
 	ctx context.Context, job *kata.Job, kind string, steps []kata.Step,
+	log *slog.Logger,
 ) string {
 	if len(steps) == emptyLen {
 		return unset
@@ -332,23 +413,36 @@ func (s *scheduler) runSteps(
 
 	logPath := filepath.Join(s.layout.jobDir(job.Name), stepsLog)
 
-	log, err := openLog(logPath)
+	out, err := openLog(logPath)
 	if err != nil {
 		return fmt.Sprintf("open steps log: %v", err)
 	}
-	defer log.Close()
+	defer out.Close()
 
 	for i, step := range steps {
 		argv := kata.ExpandAll(job, step, s.params, s.layout.artifacts())
 
-		code, err := runStep(ctx, argv, s.layout.work(job.Name), log)
-		if err != nil {
-			return fmt.Sprintf("%s %d: %v", kind, i+stepNum, err)
-		}
+		began := time.Now()
+		code, err := runStep(ctx, argv, s.layout.work(job.Name), out)
+		log.Log(ctx, levelFor[err == nil && code == exitOK], "step",
+			keyKind, kind, "index", i+stepNum, "argv", argv,
+			keyExit, code, durSince(began))
 
-		if code != exitOK {
-			return fmt.Sprintf("%s %d exited %d", kind, i+stepNum, code)
+		if failure := stepFailure(kind, i, code, err); failure != unset {
+			return failure
 		}
+	}
+
+	return unset
+}
+
+func stepFailure(kind string, i, code int, err error) string {
+	if err != nil {
+		return fmt.Sprintf("%s %d: %v", kind, i+stepNum, err)
+	}
+
+	if code != exitOK {
+		return fmt.Sprintf("%s %d exited %d", kind, i+stepNum, code)
 	}
 
 	return unset
@@ -356,7 +450,7 @@ func (s *scheduler) runSteps(
 
 // runPrompt runs the job's executor once; a job without a prompt passes.
 func (s *scheduler) runPrompt(
-	ctx context.Context, job *kata.Job, rec *jobRecord,
+	ctx context.Context, job *kata.Job, rec *jobRecord, log *slog.Logger,
 ) string {
 	p := job.Executor
 	if p == nil {
@@ -374,11 +468,12 @@ func (s *scheduler) runPrompt(
 		prompt:  kata.Expand(job, job.Prompt, s.params, s.layout.artifacts()),
 		options: p.Options,
 		skills:  skills,
-		mcps:    s.usableMCPs(job, rec),
+		mcps:    usableMCPs(job, rec, log),
 		timeout: time.Duration(p.TimeoutSeconds) * time.Second,
 		home:    s.layout.home(job.Name),
 		work:    s.layout.work(job.Name),
-		logPath: filepath.Join(s.layout.jobDir(job.Name), executorLog),
+		jobDir:  s.layout.jobDir(job.Name),
+		log:     log,
 	})
 	if err != nil {
 		return fmt.Sprintf("executor: %v", err)
@@ -395,7 +490,7 @@ func (s *scheduler) runPrompt(
 
 // usableMCPs is the job's MCP URLs minus the optional servers whose
 // variables are unset, each skip warned about and recorded.
-func (s *scheduler) usableMCPs(job *kata.Job, rec *jobRecord) []string {
+func usableMCPs(job *kata.Job, rec *jobRecord, log *slog.Logger) []string {
 	urls := make([]string, emptyLen, len(job.Executor.MCPs))
 
 	for _, mcp := range job.Executor.MCPs {
@@ -408,8 +503,7 @@ func (s *scheduler) usableMCPs(job *kata.Job, rec *jobRecord) []string {
 
 		server := mcpName(mcp.URL)
 		rec.SkippedMCPs = append(rec.SkippedMCPs, server)
-		s.logf("warning: job %s: skipping MCP %s: %s is unset",
-			job.Name, server, name)
+		log.Warn("skipping MCP: variable unset", "server", server, "var", name)
 	}
 
 	return urls
@@ -453,13 +547,6 @@ func (s *scheduler) record(started, finished time.Time) *record {
 	return rec
 }
 
-func (s *scheduler) logf(format string, args ...any) {
-	if s.progress == nil {
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	fmt.Fprintf(s.progress, format+"\n", args...)
+func durSince(began time.Time) slog.Attr {
+	return slog.Int64(keyDur, time.Since(began).Milliseconds())
 }
