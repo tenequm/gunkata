@@ -12,12 +12,10 @@ check, and the reconciled ledger carries every finding with a disposition. Run i
 (`--input name=path`, `{{input:<name>}}`) feed the diff in; see
 `graphs/review-cuttle-62.yaml`.
 
-The graph now routes models per work shape, runs each verify in a different model family
-than the lens it checks with the lens framing stripped out, and carries non-gating shadow
-lenses on a free lane for comparison data. Measured against the flat-model baseline, that
-took the run from one finding nobody re-derived to three findings that survive a hostile
-re-read, with half the raw findings rejected on evidence. The staging plan and every
-measurement live in `docs/plans/2609-17-review-graph-port-plan.md`.
+The graph now routes models per work shape and runs each verify blinded, at high
+reasoning effort, in a different model family than the lens it checks. Measured against
+the flat-model baseline, that took the run from one finding nobody re-derived to three
+findings that survive a hostile re-read, with half the raw findings rejected on evidence.
 
 - [AGENTS.md](AGENTS.md) - design intent, the executor contract, and the seven locks.
 - [docs/](docs/) - requirement documents and the starter corpus case.

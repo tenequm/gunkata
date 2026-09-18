@@ -17,6 +17,9 @@ go.work.sum
 /.claude/skills/
 /.agents/skills/
 
+# Session state
+/.agents/compact-handoff/
+
 # Local tool overrides
 lefthook-local.yml
 .direnv/
