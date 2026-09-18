@@ -218,13 +218,14 @@ func (s *scheduler) runPrompt(
 	artifacts, inputs := s.layout.artifacts(), s.layout.inputs()
 
 	code, err := runExecutor(ctx, execSpec{
-		agent:   n.Agent,
-		model:   n.Model,
-		prompt:  s.graph.Expand(n, n.Prompt, artifacts, inputs),
-		timeout: time.Duration(n.TimeoutSeconds) * time.Second,
-		home:    s.layout.home(n.Name),
-		work:    s.layout.work(n.Name),
-		logPath: s.layout.logPath(n.Name),
+		agent:         n.Agent,
+		model:         n.Model,
+		prompt:        s.graph.Expand(n, n.Prompt, artifacts, inputs),
+		configOptions: n.ConfigOptions,
+		timeout:       time.Duration(n.TimeoutSeconds) * time.Second,
+		home:          s.layout.home(n.Name),
+		work:          s.layout.work(n.Name),
+		logPath:       s.layout.logPath(n.Name),
 	})
 	if err != nil {
 		s.logf(nodeLogFmt, n.Name, err)
