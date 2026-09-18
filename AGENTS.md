@@ -2,14 +2,15 @@
 
 ## Design intent
 
-gunkata is a DAG orchestrator for agent executors. Work is declared as a graph of steps;
-the engine schedules it, runs each step in an isolated executor, and releases dependents
-only against verified evidence. It is assembled out of blocks the operator understands and
-can debug end to end, after two weeks with an engine whose out-of-the-box machinery - its
-own prompts, its own roles, its own retry and grading behaviour - contaminated every run
-and made it impossible to tell whether an outcome came from the work or from the harness.
-gunkata is generic, flexible and unopinionated out of the box: no built-in roles, no
-built-in prompts, no built-in review shape. What a run does is what the graph says it does.
+gunkata is a DAG orchestrator for agent executors. Work is declared as a kata - a
+workflow file, spec in `docs/spec.md` - the engine schedules it, runs each job in an
+isolated executor, and releases dependents only against verified evidence. It is
+assembled out of blocks the operator understands and can debug end to end, after two
+weeks with an engine whose out-of-the-box machinery - its own prompts, its own roles,
+its own retry and grading behaviour - contaminated every run and made it impossible to
+tell whether an outcome came from the work or from the harness. gunkata is generic,
+flexible and unopinionated out of the box: no built-in roles, no built-in prompts, no
+built-in review shape. What a run does is what the kata says it does.
 
 ## Core driver
 
@@ -60,16 +61,14 @@ lock there first, then here.
   substantial work, review whether a durable decision or finding should be captured. The
   index listing is generated: run `python3 scripts/kb_index.py` after any concept change
   (pre-commit enforces `--check`).
-- `docs/2609-17-review-pr-requirements.md` - what a pull request review must achieve.
-- `docs/2609-17-build-pipeline-requirements.md` - what the build pipeline must achieve.
+- `docs/spec.md` - the kata spec, the normative authority on the workflow file format.
+  `docs/full.kata.yml` shows the complete surface.
 - `docs/2609-17-starter-corpus-case.md` - the single starter case of lock 7.
+- `katas/` - real katas, not graded.
 - `examples/` - the graded corpus, doubling as the usage examples. Everything in it is
   graded, so lock 7's growth rule governs the directory.
 - `packages/gunkata/` - the Go engine (module `github.com/tenequm/gunkata`). All Go tooling
   runs from there; the `just` recipes and the lefthook Go jobs already do.
-
-The two requirement docs are goals, not designs, and carry no tool names on purpose. Keep
-them that way.
 
 ## Build discipline (MVP)
 

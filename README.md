@@ -5,9 +5,9 @@ isolated, bare executor, and a dependent is released only when the upstream step
 evidence artifact exists and passes its check. Generic and unopinionated out of the box:
 no built-in roles, no built-in prompts.
 
-**Status: engine and grader run real multi-node DAGs; the workflow schema is being
-redesigned from first principles** (see
-`docs/knowledge/decisions/2609-18-graph-schema-v2-ci-shaped-workflow-files.md`).
+**Status: engine and grader run real multi-node DAGs; the engine is being ported to the
+kata spec** (`docs/spec.md`, the normative workflow file format; `katas/` holds real
+katas).
 
 - [AGENTS.md](AGENTS.md) - design intent, the executor contract, and the seven locks.
 - [docs/](docs/) - requirement documents and the starter corpus case.

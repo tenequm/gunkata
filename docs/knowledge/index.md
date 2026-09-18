@@ -30,16 +30,13 @@ Enter through this listing and open only what the task needs.
 
 # Decisions
 
-* [Graph schema v2: CI-shaped workflow files](decisions/2609-18-graph-schema-v2-ci-shaped-workflow-files.md) - Rework the graph YAML toward CI-workflow shape with gunkata's own semantics - agent profiles, a workflow job map, plural namespaced outputs with post-step checks, invocation params - plus the CI lessons worth borrowing and the anti-lessons that stay out.
 * [A run ends when its process tree is dead](decisions/a-run-ends-when-its-process-tree-is-dead.md) - Teardown is part of the run contract; the engine owns the full process tree via process groups.
 * [Completion is verified, never claimed](decisions/completion-is-verified-never-claimed.md) - A task is done when its named evidence artifact exists and passes its check; dependents release only after verification.
 * [Cost is observability, never control flow](decisions/cost-is-observability-never-control-flow.md) - Dollar amounts are recorded and reported but no bound in the engine may read one.
 * [Evidence is files and exit codes](decisions/evidence-is-files-and-exit-codes.md) - The engine gates on artifacts on disk and transcripts synced into its own dedicated pond, never on a stream, a status field, or an agent's say-so.
-* [Graphs declare input names; runs bind the files](decisions/graphs-declare-input-names-runs-bind-the-files.md) - A graph lists the input names it needs and {{input:<name>}} references them; the concrete file arrives only at invocation via --input name=path, so a graph file never carries a host path.
 * [Model-free grading from day 0, one case first](decisions/model-free-grading-from-day-0-one-case-first.md) - The corpus starts with exactly one deterministic case the engine must pass before anything else is built, and grader tests never involve a model.
 * [No retry without classification](decisions/no-retry-without-classification.md) - A failure is classified from transcript evidence before any retry; unclassified failures park the task.
 * [The quality gate is nix, just and lefthook](decisions/the-quality-gate-is-nix-just-and-lefthook.md) - Three tools own three non-overlapping jobs - provisioning, task running and index-aware hooks - because each candidate for collapsing them fails on a specific, verified capability gap.
-* [Workspace provisioning is an engine primitive](decisions/workspace-provisioning-is-an-engine-primitive.md) - The graph declares a workspace source from a closed vocabulary and the engine provisions it - resolved once per run, materialized as a credential-free local clone per node - because deterministic, exit-code-verifiable mechanics may live in the engine while judgment never does.
 * [Zero process-global state](decisions/zero-process-global-state.md) - Every run gets its own ports, temp dirs and config paths; no defaults are shared between runs.
 
 # Findings
