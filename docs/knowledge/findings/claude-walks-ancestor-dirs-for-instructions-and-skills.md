@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: A Claude executor inherits CLAUDE.md files and skills from its cwd's ancestors
-description: Claude Code walks the ancestors of its cwd for CLAUDE.md and .claude/skills, so run dirs inside the real $HOME leak the operator's instructions and skills into every executor; CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 stops the md files, but nothing found stops the skills short of moving the cwd out of $HOME.
+description: Claude Code walks the ancestors of its cwd for CLAUDE.md and .claude/skills; the skill walk stops at $HOME or a git root, so a work dir nested inside the executor's own HOME is bounded, and CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 stops the unbounded CLAUDE.md walk.
 tags: [executor, claude, bare-start, isolation, skills, claude-md]
 status: stable
 stale_after: "2026-12-31T00:00:00Z"
@@ -10,6 +10,9 @@ sources:
   - id: live
     resource: "Live gunkata/acpx runs on this host, 2026-09-18: acpx 0.17.0, claude-agent-acp 0.76.0 bundling Claude Code 2.1.257, run dirs under ~/.local/state/gunkata/runs"
     title: Live runs whose executors reported the loaded instruction files and skills
+  - id: bundle
+    resource: "Claude Code 2.1.257 bundle, getProjectDirsUpToHome; probes with --setting-sources project,local on 2.1.257 and 2.1.277"
+    title: The skill walk's stop conditions
   - id: runsroot
     resource: /packages/gunkata/cmd/gunkata/main.go
     title: The default runs root under the XDG state dir
@@ -27,13 +30,18 @@ environment, in a run meant to carry none of it.[^live]
 # What stops what
 
 - `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in the executor env stops the `CLAUDE.md` files.[^live]
-- No environment switch was found that stops ancestor skill discovery. The only fix is
-  placement: the executor's cwd must live outside the real `$HOME`.
+- No switch stops ancestor skill discovery (`skillOverrides` is per name only; `--safe-mode`
+  also drops the kata's own skills and MCP; `--bare` breaks subscription auth). But the skill
+  walk stops at `os.homedir()` - `$HOME` itself is not scanned - at a git root, or at `/`.[^bundle]
+  gunkata had the executor's HOME beside its cwd (`jobs/<job>/home` and `jobs/<job>/work`), so
+  the walk ran past it into the real home.
 
-# Open
+# Resolution
 
-Where executor cwds should live instead is not decided as of 2026-09-18. Until it is, any run
-whose run dir is under the real `$HOME` should be assumed to carry the operator's skills.
+The job's working directory is now `jobs/<job>/home/work`, inside the executor's HOME, so the
+skill walk stops at that HOME wherever the run dir sits - the runs root stays in the XDG state
+dir. A live run from `~/.local/state` confirmed only the declared skill loaded.[^live] The
+`CLAUDE.md` walk is not HOME-bounded, so `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` stays set.
 
 A related trap this leak masked is recorded in
 [acpx loads Claude with project and local settings only](/findings/acpx-claude-skips-user-settings-by-default.md).
