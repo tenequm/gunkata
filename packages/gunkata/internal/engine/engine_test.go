@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -431,15 +432,23 @@ func assertExecutorEnv(t *testing.T, home string) {
 		}
 	}
 
-	if env["ENABLE_CLAUDEAI_MCP_SERVERS"] != "false" {
-		t.Error("the claude harness may load claude.ai connectors")
+	claudeEnv := map[string]string{}
+
+	for _, pair := range harnessEnv[harnessClaude] {
+		key, value, _ := strings.Cut(pair, "=")
+		claudeEnv[key] = value
+
+		if env[key] != value {
+			t.Errorf("claude executor %s = %q, want %q", key, env[key], value)
+		}
+	}
+
+	if claudeEnv["ENABLE_CLAUDEAI_MCP_SERVERS"] != "false" || claudeEnv["ACPX_CLAUDE_INCLUDE_USER_SETTINGS"] != "1" {
+		t.Error("the claude harness may load claude.ai connectors or skip its skills")
 	}
 
 	// bash sets the rest of these itself; nothing else may appear.
-	allowed := append([]string{
-		"PWD", "OLDPWD", "SHLVL", "_",
-		"ENABLE_CLAUDEAI_MCP_SERVERS",
-	}, inherited...)
+	allowed := slices.Concat([]string{"PWD", "OLDPWD", "SHLVL", "_"}, inherited, slices.Collect(maps.Keys(claudeEnv)))
 	for key := range env {
 		if _, own := want[key]; !own && !slices.Contains(allowed, key) {
 			t.Errorf("%s crossed the executor boundary", key)

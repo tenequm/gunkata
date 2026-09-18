@@ -80,9 +80,19 @@ var harnessAuth = map[string][]string{
 }
 
 // harnessEnv is what a harness needs set to start bare. Claude Code would
-// otherwise load the claude.ai connectors tied to the subscription login.
+// otherwise load the claude.ai connectors tied to the subscription login,
+// ancestor CLAUDE.md files, its bundled skills and auto memory; acpx would
+// skip the user scope, where the job's skills are copied.
 var harnessEnv = map[string][]string{
-	harnessClaude: {"ENABLE_CLAUDEAI_MCP_SERVERS=false"},
+	harnessClaude: {
+		"ACPX_CLAUDE_INCLUDE_USER_SETTINGS=1",
+		"ENABLE_CLAUDEAI_MCP_SERVERS=false",
+		"CLAUDE_CODE_DISABLE_CLAUDE_MDS=1",
+		"CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1",
+		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"DISABLE_AUTOUPDATER=1",
+	},
 }
 
 // githubAuth is the host's own gh and git access, inherited by every harness:
