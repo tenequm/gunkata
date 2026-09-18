@@ -168,24 +168,6 @@ test-watch:
 bench:
     go test -bench=. -benchmem ./...
 
-# Run the starter corpus: both variants end to end, then graded (needs acpx)
-[group('test')]
-[working-directory('packages/gunkata')]
-corpus: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    pass_dir="$(./{{ binary }} run ../../examples/starter/pass.yaml)"
-    echo "pass run: $pass_dir"
-    ./{{ binary }} grade --variant pass "$pass_dir"
-    fail_dir="$(./{{ binary }} run ../../examples/starter/fail.yaml)" && code=0 || code=$?
-    echo "fail run: $fail_dir"
-    if [[ "$code" -ne 2 ]]; then
-        echo "fail variant exited $code, want 2 (parked)" >&2
-        exit 1
-    fi
-    ./{{ binary }} grade --variant fail "$fail_dir"
-    echo "corpus ok: pass succeeded, fail parked, both graded clean"
-
 # Build
 
 # Build the binary
@@ -238,8 +220,7 @@ kb-check:
 
 # Both verbs run their gates concurrently. `check` is staged-only and applies
 # fixes; `check-ci` is whole-repo and mutates nothing, so the pre-push hook and
-# CI run the identical command and cannot drift. `corpus` is in neither: it
-# spends real model quota.
+# CI run the identical command and cannot drift.
 
 # Report any gate tool missing from the shell
 [group('ci')]

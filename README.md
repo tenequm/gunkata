@@ -9,10 +9,11 @@ no built-in roles, no built-in prompts.
 kata spec** (`docs/spec.md`, the normative workflow file format; `katas/` holds real
 katas).
 
-- [AGENTS.md](AGENTS.md) - design intent, the executor contract, and the seven locks.
-- [docs/](docs/) - requirement documents and the starter corpus case.
-- [docs/knowledge/](docs/knowledge/index.md) - durable decisions and findings.
-- [examples/](examples/) - the graded corpus, doubling as the usage examples.
+- [AGENTS.md](AGENTS.md) - design intent and the executor contract.
+- [docs/spec.md](docs/spec.md) - the kata spec; [docs/full.kata.yml](docs/full.kata.yml)
+  shows the complete surface.
+- [katas/](katas/) - real katas.
+- [docs/knowledge/](docs/knowledge/index.md) - durable findings and references.
 - [packages/gunkata/](packages/gunkata/) - the Go engine; all Go tooling runs from there.
 
 `nix develop` gives the pinned toolchain; `just check` is the full gate.

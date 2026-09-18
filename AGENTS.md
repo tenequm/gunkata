@@ -32,8 +32,8 @@ credentials and auth. Every addition is explicitly specified by the step that ne
 The engine's design principles - verified completion, file evidence, per-run isolation,
 park-not-retry, process-tree teardown - live in `docs/spec.md` under Principles.
 
-One rule lives here: `examples/` is the graded corpus, it grows only from real cases
-encountered in practice, never speculatively, and grader tests never involve a model.
+One rule lives here: a graded corpus grows only from real cases encountered in practice,
+never speculatively, and grader tests never involve a model.
 
 ## Where things are
 
@@ -44,10 +44,7 @@ encountered in practice, never speculatively, and grader tests never involve a m
   (pre-commit enforces `--check`).
 - `docs/spec.md` - the kata spec, the normative authority on the workflow file format.
   `docs/full.kata.yml` shows the complete surface.
-- `docs/2609-17-starter-corpus-case.md` - the single starter corpus case.
 - `katas/` - real katas, not graded.
-- `examples/` - the graded corpus, doubling as the usage examples. Everything in it is
-  graded, so the corpus growth rule governs the directory.
 - `packages/gunkata/` - the Go engine (module `github.com/tenequm/gunkata`). All Go tooling
   runs from there; the `just` recipes and the lefthook Go jobs already do.
 

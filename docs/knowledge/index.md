@@ -33,8 +33,6 @@ Enter through this listing and open only what the task needs.
 
 * [A gate must run inside the pinned dev shell](findings/a-gate-must-run-inside-the-pinned-dev-shell.md) - A hook inherits the invoking shell, so an environment cached before a flake change fails the gate with a bare exit 127; the pre-push hook therefore wraps itself in nix develop.
 * [A bare executor HOME must still carry the agy server directory](findings/executor-homes-need-the-agy-server-dir.md) - The Antigravity ACP wrapper resolves its .par through $HOME, so an engine-owned HOME breaks executor startup until the server directory is explicitly inherited alongside the credentials.
-* [lefthook guarantees less about the index than it appears](findings/lefthook-guarantees-less-about-the-index-than-it-appears.md) - stage_fixed re-stages the list it was given rather than what changed, only partially staged files are hidden, the backup stash is shared across linked worktrees, and LEFTHOOK=0 turns any run into a silent pass.
-* [acpx is not flake-pinned; executor CLIs never will be](findings/runtime-deps-not-yet-flake-pinned.md) - pond is packaged in the flake from its release binaries, acpx is host-provided pending a pnpm packaging route, and the executor CLIs are host-provided by necessity.
 
 # References
 
