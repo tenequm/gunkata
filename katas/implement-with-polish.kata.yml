@@ -1,0 +1,57 @@
+# Implement a brief on a new branch, then polish the result - all local, no remote
+# needed beyond the initial clone (and none at all when repo is a local path).
+#
+# Run: gunkata run katas/implement-with-polish.kata.yml \
+#        -p repo=<url or local path> -p branch=<new branch> -p brief=<brief file>
+#
+# The deliverable is artifacts/polish/repo in the run dir; pull it with
+#   git fetch <runDir>/artifacts/polish/repo <branch>
+name: implement-with-polish
+
+params:
+  repo: {}
+  ref: {default: main}
+  branch: {}
+  brief: {}
+
+agents:
+  executor:
+    harness: claude
+    model: claude-opus-5
+    timeout_seconds: 3600
+    skills:
+      - https://github.com/tenequm/skills/tree/main/skills/gh-cli
+    mcps:
+      - https://glim.sh/mcp?apiKey=${GLIM_API_KEY}
+
+workflow:
+
+  implement:
+    agent: executor
+    pre-steps:
+      - git clone --branch {{param:ref}} {{param:repo}} {{output:repo}}
+      - git -C {{output:repo}} switch -c {{param:branch}}
+    prompt: |
+      Read the brief at {{param:brief}}. Implement it in the repository at
+      {{output:repo}} on the current branch, committing as you go.
+      Write a short summary of the change to {{output:summary.md}}.
+    outputs: [repo, summary.md]
+    post-steps:
+      - git -C {{output:repo}} rev-parse --verify {{param:branch}}
+
+  polish:
+    agent:
+      profile: executor
+      skills:
+        - https://github.com/tenequm/skills/tree/main/skills/polish
+    needs: [implement]
+    pre-steps:
+      - git clone --branch {{param:branch}} {{artifact:implement/repo}} {{output:repo}}
+    prompt: |
+      Run /polish on the current branch in the repository at {{output:repo}},
+      with all fixes applied and committed. The change's own summary is at
+      {{artifact:implement/summary.md}}. Write the review summary to
+      {{output:report.md}}.
+    outputs: [repo, report.md]
+    post-steps:
+      - git -C {{output:repo}} rev-parse --verify {{param:branch}}
