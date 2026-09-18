@@ -38,6 +38,7 @@ Enter through this listing and open only what the task needs.
 * [Model-free grading from day 0, one case first](decisions/model-free-grading-from-day-0-one-case-first.md) - The corpus starts with exactly one deterministic case the engine must pass before anything else is built, and grader tests never involve a model.
 * [No retry without classification](decisions/no-retry-without-classification.md) - A failure is classified from transcript evidence before any retry; unclassified failures park the task.
 * [The quality gate is nix, just and lefthook](decisions/the-quality-gate-is-nix-just-and-lefthook.md) - Three tools own three non-overlapping jobs - provisioning, task running and index-aware hooks - because each candidate for collapsing them fails on a specific, verified capability gap.
+* [Workspace provisioning is an engine primitive](decisions/workspace-provisioning-is-an-engine-primitive.md) - The graph declares a workspace source from a closed vocabulary and the engine provisions it - resolved once per run, materialized as a credential-free local clone per node - because deterministic, exit-code-verifiable mechanics may live in the engine while judgment never does.
 * [Zero process-global state](decisions/zero-process-global-state.md) - Every run gets its own ports, temp dirs and config paths; no defaults are shared between runs.
 
 # Findings
