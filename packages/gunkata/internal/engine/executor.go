@@ -78,13 +78,14 @@ var authLinks = map[string][]string{
 
 // execSpec is one acpx invocation.
 type execSpec struct {
-	agent   string
-	model   string
-	prompt  string
-	timeout time.Duration
-	home    string
-	work    string
-	logPath string
+	agent         string
+	model         string
+	prompt        string
+	configOptions []string
+	timeout       time.Duration
+	home          string
+	work          string
+	logPath       string
 }
 
 // runExecutor starts acpx bare - whitelisted environment, engine-owned HOME,
@@ -178,7 +179,8 @@ func killGroup(p *os.Process) error {
 
 // acpxArgs builds the invocation. acpx takes its agent either as a command
 // behind --agent or as one of its own modes, named positionally after the
-// global flags; the node's agent says which.
+// global flags; the node's agent says which. Config options are flags of the
+// exec subcommand, so they sit after it and before the prompt.
 func acpxArgs(spec execSpec) []string {
 	mode, builtin := strings.CutPrefix(spec.agent, acpxBuiltin)
 
@@ -199,7 +201,13 @@ func acpxArgs(spec execSpec) []string {
 		args = append(args, mode)
 	}
 
-	return append(args, "exec", spec.prompt)
+	args = append(args, "exec")
+
+	for _, option := range spec.configOptions {
+		args = append(args, "--config-option", option)
+	}
+
+	return append(args, spec.prompt)
 }
 
 // executorEnv is the whole environment an executor gets: the whitelist, plus

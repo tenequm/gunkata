@@ -109,7 +109,8 @@ nodes:
 `
 
 // builtinGraph overrides the default agent with an acpx built-in mode, the
-// other of the two invocation shapes.
+// other of the two invocation shapes, and declares a config option so the
+// argv pin covers where those land.
 const builtinGraph = `
 name: stub-builtin
 defaults:
@@ -119,6 +120,7 @@ defaults:
 nodes:
   - name: produce
     agent: acpx:pi
+    config_options: ["reasoning_effort=high"]
     prompt: |
       ACTION=write
       TARGET={{artifact}}
@@ -545,6 +547,8 @@ func TestRunStartsTheExecutorBare(t *testing.T) {
 // TestRunStartsAnACPXBuiltinAgent holds the other invocation shape: a node
 // whose agent names an acpx mode is started as `acpx <mode> exec`, with no
 // --agent, and the mode sits after the global flags where acpx requires it.
+// The node's config options are exec flags, so they follow exec and precede
+// the prompt.
 func TestRunStartsAnACPXBuiltinAgent(t *testing.T) {
 	stubACPX(t)
 
@@ -562,6 +566,7 @@ func TestRunStartsAnACPXBuiltinAgent(t *testing.T) {
 		"--format", "quiet",
 		"pi",
 		"exec",
+		"--config-option", "reasoning_effort=high",
 	}
 
 	if !slices.Equal(argv[:len(want)], want) {

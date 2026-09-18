@@ -81,6 +81,9 @@ type Node struct {
 	Agent          string   `yaml:"agent"`
 	Model          string   `yaml:"model"`
 	TimeoutSeconds int      `yaml:"timeout_seconds"`
+	// ConfigOptions are key=value session settings the executor is given,
+	// such as reasoning_effort=high. They belong to the step, not the graph.
+	ConfigOptions []string `yaml:"config_options"`
 }
 
 // placeholder matches {{artifact}}, {{artifact:<node>}} and {{input:<name>}}.
