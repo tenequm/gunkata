@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 )
 
@@ -17,13 +16,15 @@ import (
 // reader needs the directory and nothing else.
 const (
 	artifactsDir = "artifacts"
-	inputsDir    = "inputs"
-	nodesDir     = "nodes"
+	paramsDir    = "params"
+	jobsDir      = "jobs"
+	skillsDir    = "skills"
 	homeDir      = "home"
 	workDir      = "work"
-	logName      = "executor.log"
+	executorLog  = "executor.log"
+	stepsLog     = "steps.log"
 	recordName   = "record.json"
-	graphName    = "graph.yaml"
+	kataName     = "kata.yml"
 )
 
 const (
@@ -36,54 +37,51 @@ const (
 	idAttempts = 8
 )
 
-var (
-	errRunID        = errors.New("could not claim a free run directory")
-	errUnknownInput = errors.New("no such input is declared by the graph")
-	errUnboundInput = errors.New("declared input has no --input binding")
-	errInputSource  = errors.New("input source is not a non-empty regular file")
-)
+var errRunID = errors.New("could not claim a free run directory")
 
 // Outcome is a run's verdict.
 type Outcome string
 
-// A run succeeded only when every node did; anything else parks it.
+// A run succeeded only when every job did; anything else parks it.
 const (
 	OutcomeSucceeded Outcome = "succeeded"
 	OutcomeParked    Outcome = "parked"
 )
 
-// nodeState is what the engine concluded about one node.
-type nodeState string
+// jobState is what the engine concluded about one job.
+type jobState string
 
 const (
-	statePending nodeState = "pending"
-	stateDone    nodeState = "done"
-	stateParked  nodeState = "parked"
+	statePending jobState = "pending"
+	stateDone    jobState = "done"
+	stateParked  jobState = "parked"
 )
 
 // record is the run's final account of itself, written to record.json.
 type record struct {
 	RunID      string  `json:"run_id"`
-	Graph      string  `json:"graph"`
+	Kata       string  `json:"kata"`
 	Outcome    Outcome `json:"outcome"`
 	StartedAt  string  `json:"started_at"`
 	FinishedAt string  `json:"finished_at"`
-	// Inputs names each declared input and the source file it was bound to.
-	// A graph that declares none records none.
-	Inputs map[string]string      `json:"inputs,omitempty"`
-	Nodes  map[string]*nodeRecord `json:"nodes"`
+	// Params is every bound value; a file param states the source it was
+	// snapshotted from.
+	Params map[string]string `json:"params,omitempty"`
+	// Skills maps each declared skill to the SHA or local path it was
+	// snapshotted from.
+	Skills map[string]string     `json:"skills,omitempty"`
+	Jobs   map[string]*jobRecord `json:"jobs"`
 }
 
-// nodeRecord holds one node's evidence: the exit codes it produced and the
-// artifact it declared. A nil field means that evidence never happened.
-type nodeRecord struct {
-	State        nodeState `json:"state"`
-	Attempts     int       `json:"attempts"`
-	StartedAt    *string   `json:"started_at"`
-	FinishedAt   *string   `json:"finished_at"`
-	ExecutorExit *int      `json:"executor_exit"`
-	GateExit     *int      `json:"gate_exit"`
-	Artifact     *string   `json:"artifact"`
+// jobRecord holds one job's evidence. A nil field means that evidence never
+// happened.
+type jobRecord struct {
+	State        jobState `json:"state"`
+	StartedAt    *string  `json:"started_at"`
+	FinishedAt   *string  `json:"finished_at"`
+	ExecutorExit *int     `json:"executor_exit"`
+	// Failure names the first piece of evidence that did not pass.
+	Failure string `json:"failure,omitempty"`
 }
 
 // layout is one run's directory and the paths inside it.
@@ -131,12 +129,7 @@ func claimRunDir(root string) (*layout, error) {
 		return nil, fmt.Errorf("create run dir: %w", err)
 	}
 
-	l := &layout{id: filepath.Base(dir), dir: dir}
-	if err := os.MkdirAll(l.artifacts(), dirPerm); err != nil {
-		return nil, fmt.Errorf("create artifacts dir: %w", err)
-	}
-
-	return l, nil
+	return &layout{id: filepath.Base(dir), dir: dir}, nil
 }
 
 // newRunID is a UTC timestamp plus four hex chars, so two runs started in the
@@ -153,144 +146,93 @@ func (l *layout) artifacts() string {
 	return filepath.Join(l.dir, artifactsDir)
 }
 
-func (l *layout) inputs() string {
-	return filepath.Join(l.dir, inputsDir)
+func (l *layout) skills() string {
+	return filepath.Join(l.dir, skillsDir)
 }
 
-func (l *layout) nodeDir(name string) string {
-	return filepath.Join(l.dir, nodesDir, name)
+func (l *layout) jobDir(name string) string {
+	return filepath.Join(l.dir, jobsDir, name)
 }
 
 func (l *layout) home(name string) string {
-	return filepath.Join(l.nodeDir(name), homeDir)
+	return filepath.Join(l.jobDir(name), homeDir)
 }
 
 func (l *layout) work(name string) string {
-	return filepath.Join(l.nodeDir(name), workDir)
+	return filepath.Join(l.jobDir(name), workDir)
 }
 
-func (l *layout) logPath(name string) string {
-	return filepath.Join(l.nodeDir(name), logName)
-}
-
-// ensureNode creates the node's executor directories. A node without a
-// prompt never calls it, so a check-only node leaves no nodes/ entry.
-func (l *layout) ensureNode(name string) error {
-	for _, dir := range []string{l.home(name), l.work(name)} {
+// ensureJob creates the job's output and working directories. A job that
+// never starts never calls it, so it leaves no trace on disk.
+func (l *layout) ensureJob(name string) error {
+	dirs := []string{filepath.Join(l.artifacts(), name), l.work(name)}
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, dirPerm); err != nil {
-			return fmt.Errorf("create node dir: %w", err)
+			return fmt.Errorf("create job dir: %w", err)
 		}
 	}
 
 	return nil
 }
 
-// copyGraph stores the input graph verbatim beside the record.
-func (l *layout) copyGraph(src string) error {
+// copyKata stores the kata verbatim beside the record.
+func (l *layout) copyKata(src string) error {
 	raw, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("read graph: %w", err)
+		return fmt.Errorf("read kata: %w", err)
 	}
 
-	dst := filepath.Join(l.dir, graphName)
-	//nolint:gosec // the graph path is the run's input, and dst is the run dir
-	if err := os.WriteFile(dst, raw, filePerm); err != nil {
-		return fmt.Errorf("copy graph: %w", err)
+	//nolint:gosec // the kata path is the run's input, and dst is the run dir
+	err = os.WriteFile(filepath.Join(l.dir, kataName), raw, filePerm)
+	if err != nil {
+		return fmt.Errorf("copy kata: %w", err)
 	}
 
 	return nil
 }
 
-// bindInputs copies every file bound to a declared input into the run's
-// inputs dir and reports the absolute source each name was bound to. It runs
-// before any node does, so a misbound run fails outright instead of parking.
-func (l *layout) bindInputs(
-	declared []string, bound map[string]string,
-) (map[string]string, error) {
-	for name := range bound {
-		if !slices.Contains(declared, name) {
-			return nil, fmt.Errorf("%w: %q", errUnknownInput, name)
+// snapshotParams copies every param whose value is an existing regular file
+// into the run dir, and returns the values placeholders expand to.
+func (l *layout) snapshotParams(bound map[string]string) (
+	map[string]string, error,
+) {
+	values := make(map[string]string, len(bound))
+
+	for key, value := range bound {
+		info, err := os.Stat(value)
+		if err != nil || !info.Mode().IsRegular() {
+			values[key] = value
+
+			continue
 		}
+
+		dst := filepath.Join(l.dir, paramsDir, key, filepath.Base(value))
+		if err := copyFile(value, dst); err != nil {
+			return nil, fmt.Errorf("snapshot param %q: %w", key, err)
+		}
+
+		values[key] = dst
 	}
 
-	if len(declared) == emptyLen {
-		return nil, nil
-	}
-
-	return l.copyInputs(declared, bound)
+	return values, nil
 }
 
-// copyInputs copies one file per declared input, in declaration order.
-func (l *layout) copyInputs(
-	declared []string, bound map[string]string,
-) (map[string]string, error) {
-	sources := make(map[string]string, len(declared))
-
-	for _, name := range declared {
-		src, ok := bound[name]
-		if !ok {
-			return nil, fmt.Errorf("%w: %q", errUnboundInput, name)
-		}
-
-		abs, err := l.copyInput(name, src)
-		if err != nil {
-			return nil, err
-		}
-
-		sources[name] = abs
-	}
-
-	return sources, nil
-}
-
-// copyInput copies the bound file's bytes into the run's inputs dir and
-// reports the absolute source it came from, so the run holds its own copy of
-// what it was given rather than a link to a file someone else owns.
-func (l *layout) copyInput(name, src string) (string, error) {
-	abs, err := filepath.Abs(src)
+func copyFile(src, dst string) error {
+	raw, err := os.ReadFile(src)
 	if err != nil {
-		return unset, fmt.Errorf("resolve input %q: %w", name, err)
+		return fmt.Errorf("read %s: %w", src, err)
 	}
 
-	raw, err := readInputSource(abs)
-	if err != nil {
-		return unset, fmt.Errorf("input %q: %w", name, err)
-	}
-
-	dst := filepath.Join(l.inputs(), name)
 	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
-		return unset, fmt.Errorf("create inputs dir: %w", err)
+		return fmt.Errorf("create %s: %w", filepath.Dir(dst), err)
 	}
 
+	//nolint:gosec // G703: dst is the run dir plus a validated param name
 	if err := os.WriteFile(dst, raw, filePerm); err != nil {
-		return unset, fmt.Errorf("write input %q: %w", name, err)
+		return fmt.Errorf("write %s: %w", dst, err)
 	}
 
-	return abs, nil
-}
-
-// readInputSource holds a binding to what can be evidence: a regular file
-// with something in it.
-func readInputSource(path string) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errInputSource, err)
-	}
-
-	switch {
-	case !info.Mode().IsRegular():
-		return nil, fmt.Errorf("%w: %s is not a regular file",
-			errInputSource, path)
-	case info.Size() == emptyLen:
-		return nil, fmt.Errorf("%w: %s is empty", errInputSource, path)
-	}
-
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errInputSource, err)
-	}
-
-	return raw, nil
+	return nil
 }
 
 // writeRecord writes record.json through a temp file and a rename, so a
@@ -306,14 +248,14 @@ func (l *layout) writeRecord(rec *record) error {
 		return fmt.Errorf("create record temp file: %w", err)
 	}
 
-	if err := writeAndClose(tmp, append(raw, '\n')); err != nil {
+	if writeErr := writeAndClose(tmp, append(raw, '\n')); writeErr != nil {
 		_ = os.Remove(tmp.Name())
 
-		return err
+		return writeErr
 	}
 
-	dst := filepath.Join(l.dir, recordName)
-	if err := os.Rename(tmp.Name(), dst); err != nil {
+	err = os.Rename(tmp.Name(), filepath.Join(l.dir, recordName))
+	if err != nil {
 		_ = os.Remove(tmp.Name())
 
 		return fmt.Errorf("install record: %w", err)

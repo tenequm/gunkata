@@ -1,8 +1,10 @@
 package main
 
 import (
+	"flag"
 	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -29,11 +31,10 @@ func TestDispatchUsage(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string][]string{
-		"no arguments":            {cmdName},
-		"unknown command":         {cmdName, "orchestrate"},
-		"run without a graph":     {cmdName, "run"},
-		"grade without a variant": {cmdName, "grade", "/tmp/run"},
-		"grade without a run dir": {cmdName, "grade", "--variant", "pass"},
+		"no arguments":       {cmdName},
+		"unknown command":    {cmdName, "orchestrate"},
+		"run without a kata": {cmdName, "run"},
+		"run with two katas": {cmdName, "run", "a.kata.yml", "b.kata.yml"},
 	}
 
 	for name, argv := range cases {
@@ -65,32 +66,60 @@ func assertUsage(t *testing.T, argv []string) {
 	}
 }
 
-func TestInputBindings(t *testing.T) {
+func TestParamBindings(t *testing.T) {
 	t.Parallel()
 
-	bindings := inputBindings{}
-	if err := bindings.Set("seed.txt=/tmp/seed"); err != nil {
+	bindings := paramBindings{}
+	if err := bindings.Set("pr=https://github.com/o/r/pull/1"); err != nil {
 		t.Fatalf("Set() returned error: %v", err)
 	}
 
-	if err := bindings.Set("other=/tmp/a=b"); err != nil {
+	if err := bindings.Set("expr=a=b"); err != nil {
 		t.Fatalf("Set() returned error: %v", err)
 	}
 
-	want := inputBindings{"seed.txt": "/tmp/seed", "other": "/tmp/a=b"}
+	if err := bindings.Set("blank="); err != nil {
+		t.Fatalf("Set() returned error: %v", err)
+	}
+
+	want := paramBindings{"pr": "https://github.com/o/r/pull/1", "expr": "a=b", "blank": ""}
 	if !maps.Equal(bindings, want) {
 		t.Errorf("bindings = %v, want %v", bindings, want)
 	}
 
-	if err := bindings.Set("seed.txt=/tmp/again"); err == nil {
-		t.Error("Set() accepted the same input twice, want an error")
+	if err := bindings.Set("pr=again"); err == nil {
+		t.Error("Set() accepted the same param twice, want an error")
 	}
 
-	fresh := inputBindings{}
-	for _, raw := range []string{"seed.txt", "=/tmp/seed", "seed.txt="} {
-		if err := fresh.Set(raw); err == nil {
+	for _, raw := range []string{"pr", "=value"} {
+		if err := (paramBindings{}).Set(raw); err == nil {
 			t.Errorf("Set(%q) accepted it, want an error", raw)
 		}
+	}
+}
+
+// TestParseInterleaved pins the spec's invocation shape: params may follow
+// the kata path.
+func TestParseInterleaved(t *testing.T) {
+	t.Parallel()
+
+	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	root := flags.String("runs-root", unset, unset)
+	params := paramBindings{}
+	flags.Var(params, "p", unset)
+
+	positional, err := parseInterleaved(flags,
+		[]string{"--runs-root", "/r", "k.kata.yml", "-p", "a=1", "-p", "b=2"})
+	if err != nil {
+		t.Fatalf("parseInterleaved() returned error: %v", err)
+	}
+
+	if !slices.Equal(positional, []string{"k.kata.yml"}) {
+		t.Errorf("positional = %v, want [k.kata.yml]", positional)
+	}
+
+	if *root != "/r" || !maps.Equal(params, paramBindings{"a": "1", "b": "2"}) {
+		t.Errorf("runs-root = %q, params = %v", *root, params)
 	}
 }
 

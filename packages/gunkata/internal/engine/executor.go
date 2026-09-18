@@ -1,12 +1,19 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,23 +24,38 @@ import (
 // engine kills it. Tests lower it.
 var killGrace = 60 * time.Second
 
+// stepTimeout bounds one pre- or post-step. Tests lower it.
+var stepTimeout = 10 * time.Minute
+
 const (
-	acpxBin = "acpx"
-	// checkTimeout bounds a gate check.
-	checkTimeout = 60 * time.Second
+	acpxBin       = "acpx"
+	harnessClaude = "claude"
 	// waitDelay bounds the wait after a kill, so no run hangs on teardown.
 	waitDelay = 5 * time.Second
 	exitOK    = 0
 	// noExit accompanies an error: the process produced no exit code.
 	noExit = 0
+	// mcpStdin is where acpx reads the MCP config from, so the expanded
+	// config never touches disk.
+	mcpStdin = "/dev/stdin"
+	mcpType  = "http"
+	// domainLabels is a registrable domain's label count: name plus TLD.
+	domainLabels = 2
+	firstLabel   = 0
+	varGroup     = 1
+	firstDup     = 2
+	nameDupFmt   = "%s-%d"
 )
 
 var (
 	errACPXMissing = errors.New("acpx not found on PATH")
-	errEmptyCheck  = errors.New("check declares no command")
+	errMCPVar      = errors.New("MCP URL references an unset variable")
 )
 
-// Executor directories under the node's engine-owned HOME.
+// mcpVar matches a ${VAR} placeholder in an MCP URL.
+var mcpVar = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// Executor directories under the job's engine-owned HOME.
 const (
 	tmpDir       = "tmp"
 	xdgConfigDir = ".config"
@@ -42,50 +64,43 @@ const (
 	xdgCacheDir  = ".cache"
 )
 
-// acpxBuiltin marks a node's agent as one of acpx's own agent modes
-// (`acpx pi exec ...`) rather than an ACP agent command for `--agent`.
-const acpxBuiltin = "acpx:"
-
-// familyAgy is the family of every agent that is not an acpx built-in mode:
-// the agy ACP server command, which is what `--agent` has always pointed at.
-const familyAgy = "agy"
-
 // inherited is the whitelist that crosses the executor boundary. Skills,
 // agent instruction files, MCP config and everything else stay outside.
 var inherited = []string{"PATH", "LANG", "LC_ALL", "USER", "LOGNAME"}
 
-// checkInherited is all a check needs: it is a command with an exit code.
-var checkInherited = []string{"PATH", "LANG"}
-
-// authLinks is the subscription credentials one agent family inherits, the
-// sole inheritance the executor contract allows, as paths that hold the same
-// place under the real home and under the executor's. A family links the
-// minimum its agent needs: skills, agent instruction files and MCP config hang
-// off the same homes and must not cross.
-var authLinks = map[string][]string{
-	familyAgy: {
-		".gemini/antigravity-acp/settings.json",
-		".gemini/antigravity-acp/acp_token.json",
-		// The agy wrapper resolves its .par through $HOME, so the server
-		// binaries ride the same explicit inheritance as the credentials.
-		".local/lib/antigravity-acp",
-	},
+// harnessAuth is the subscription credentials one harness inherits, the sole
+// inheritance the executor contract allows, as paths that hold the same place
+// under the real home and under the executor's.
+var harnessAuth = map[string][]string{
+	harnessClaude: {".claude/.credentials.json"},
+	"codex":       {".codex/auth.json"},
 	// pi reads its provider list, and the key with it, from this one file.
-	// Never the whole ~/.pi.
-	"pi":    {".pi/agent/models.json"},
-	"codex": {".codex/auth.json"},
+	"pi": {".pi/agent/models.json"},
 }
+
+// harnessEnv is what a harness needs set to start bare. Claude Code would
+// otherwise load the claude.ai connectors tied to the subscription login.
+var harnessEnv = map[string][]string{
+	harnessClaude: {"ENABLE_CLAUDEAI_MCP_SERVERS=false"},
+}
+
+// githubAuth is the host's own gh and git access, inherited by every harness:
+// a gh login on a workstation, or a credential-injecting gateway (.onecli)
+// on a sandbox. A path the host lacks is skipped.
+var githubAuth = []string{".config/gh", ".config/git", ".onecli"}
 
 // execSpec is one acpx invocation.
 type execSpec struct {
-	agent         string
-	model         string
-	prompt        string
-	configOptions []string
-	timeout       time.Duration
-	home          string
-	work          string
-	logPath       string
+	harness string
+	model   string
+	prompt  string
+	options map[string]string
+	skills  []string // snapshot dirs
+	mcps    []string // URLs, ${VAR} unexpanded
+	timeout time.Duration
+	home    string
+	work    string
+	logPath string
 }
 
 // runExecutor starts acpx bare - whitelisted environment, engine-owned HOME,
@@ -97,52 +112,77 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 		return noExit, fmt.Errorf("%w: %w", errACPXMissing, err)
 	}
 
-	prepErr := prepareHome(spec.home, spec.work, spec.agent)
-	if prepErr != nil {
+	if prepErr := prepareHome(spec); prepErr != nil {
 		return noExit, prepErr
 	}
 
-	logFile, err := os.OpenFile(spec.logPath,
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm)
+	mcpConfig, err := mcpConfigJSON(spec.mcps)
 	if err != nil {
-		return noExit, fmt.Errorf("open executor log: %w", err)
+		return noExit, err
+	}
+
+	logFile, err := openLog(spec.logPath)
+	if err != nil {
+		return noExit, err
 	}
 	defer logFile.Close()
 
 	cmdCtx, cancel := context.WithTimeout(ctx, spec.timeout+killGrace)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, bin, acpxArgs(spec)...)
+	var mcpFlags []string
+	if mcpConfig != nil {
+		mcpFlags = []string{"--mcp-config", mcpStdin}
+	}
+
+	cmd := exec.CommandContext(cmdCtx, bin, acpxArgs(spec, mcpFlags)...)
 	cmd.Dir = spec.work
-	cmd.Env = executorEnv(spec.home)
+	cmd.Env = append(executorEnv(spec.home), harnessEnv[spec.harness]...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+
+	if mcpConfig != nil {
+		cmd.Stdin = bytes.NewReader(mcpConfig)
+	}
 
 	return runGrouped(cmd)
 }
 
-// runCheck executes a node's declared check from the run directory. The
-// exit code is the verdict.
-func runCheck(ctx context.Context, argv []string, runDir string) (int, error) {
-	if len(argv) == emptyLen {
-		return noExit, errEmptyCheck
+func openLog(path string) (*os.File, error) {
+	const flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+
+	file, err := os.OpenFile(path, flags, filePerm)
+	if err != nil {
+		return nil, fmt.Errorf("open log: %w", err)
 	}
 
-	cmdCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+	return file, nil
+}
+
+// runStep executes one declared step engine-side: full engine environment,
+// cwd the job's working directory, output appended to log. The exit code is
+// the verdict.
+func runStep(
+	ctx context.Context, argv []string, work string, log io.Writer,
+) (int, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, stepTimeout)
 	defer cancel()
 
-	// The check is a command the graph declared; running it is the point.
-	//nolint:gosec // G204: argv comes from the graph, which is the input
+	fmt.Fprintf(log, "$ %s\n", strings.Join(argv, " "))
+
+	// The step is a command the kata declared; running it is the point.
+	//nolint:gosec // G204: argv comes from the kata, which is the input
 	cmd := exec.CommandContext(cmdCtx, argv[argvHead], argv[argvTail:]...)
-	cmd.Dir = runDir
-	cmd.Env = env(nil, checkInherited)
+	cmd.Dir = work
+	cmd.Stdout = log
+	cmd.Stderr = log
 
 	return runGrouped(cmd)
 }
 
 // runGrouped runs cmd as the leader of its own process group, so a timeout or
-// a cancelled run takes the whole tree down with it (lock 5). An exit code of
-// -1 means the engine, or a signal, killed it.
+// a cancelled run takes the whole tree down with it. An exit code of -1 means
+// the engine, or a signal, killed it.
 func runGrouped(cmd *exec.Cmd) (int, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = waitDelay
@@ -177,43 +217,107 @@ func killGroup(p *os.Process) error {
 	return nil
 }
 
-// acpxArgs builds the invocation. acpx takes its agent either as a command
-// behind --agent or as one of its own modes, named positionally after the
-// global flags; the node's agent says which. Config options are flags of the
-// exec subcommand, so they sit after it and before the prompt.
-func acpxArgs(spec execSpec) []string {
-	mode, builtin := strings.CutPrefix(spec.agent, acpxBuiltin)
-
-	var args []string
-	if !builtin {
-		args = append(args, "--agent", spec.agent)
-	}
-
-	args = append(args,
+// acpxArgs builds the invocation: global flags, the harness as acpx's
+// positional agent, then exec with its config options and the prompt.
+func acpxArgs(spec execSpec, mcpFlags []string) []string {
+	args := []string{
 		"--cwd", spec.work,
 		"--model", spec.model,
 		"--timeout", strconv.Itoa(int(spec.timeout.Seconds())),
 		"--approve-all",
 		"--format", "quiet",
-	)
-
-	if builtin {
-		args = append(args, mode)
 	}
 
-	args = append(args, "exec")
+	args = append(args, mcpFlags...)
+	args = append(args, spec.harness, "exec")
 
-	for _, option := range spec.configOptions {
-		args = append(args, "--config-option", option)
+	for _, key := range slices.Sorted(maps.Keys(spec.options)) {
+		args = append(args,
+			"--config-option", key+"="+spec.options[key])
 	}
 
 	return append(args, spec.prompt)
 }
 
+// mcpServer is one entry of acpx's mcpServers array.
+type mcpServer struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Headers []any  `json:"headers"`
+}
+
+// mcpConfigJSON expands the MCP URLs from the engine's environment into the
+// config acpx reads on stdin; nil when the job declares none. Each server is
+// named after its host's registrable label: glim for glim.sh, deepwiki for
+// mcp.deepwiki.com.
+func mcpConfigJSON(urls []string) ([]byte, error) {
+	if len(urls) == emptyLen {
+		return nil, nil
+	}
+
+	servers := make([]mcpServer, emptyLen, len(urls))
+	seen := map[string]int{}
+
+	for _, raw := range urls {
+		expanded, err := expandMCP(raw)
+		if err != nil {
+			return nil, err
+		}
+
+		name := mcpName(raw)
+		seen[name]++
+
+		if seen[name] >= firstDup {
+			name = fmt.Sprintf(nameDupFmt, name, seen[name])
+		}
+
+		servers = append(servers, mcpServer{
+			Name: name, Type: mcpType, URL: expanded, Headers: []any{},
+		})
+	}
+
+	raw, err := json.Marshal(map[string][]mcpServer{"mcpServers": servers})
+	if err != nil {
+		return nil, fmt.Errorf("encode MCP config: %w", err)
+	}
+
+	return raw, nil
+}
+
+func mcpName(raw string) string {
+	u, err := url.Parse(mcpVar.ReplaceAllString(raw, unset))
+	if err != nil || u.Hostname() == unset {
+		return "mcp"
+	}
+
+	labels := strings.Split(u.Hostname(), ".")
+
+	return labels[max(len(labels)-domainLabels, firstLabel)]
+}
+
+// expandMCP substitutes each ${VAR} from the engine's environment.
+func expandMCP(raw string) (string, error) {
+	var missing error
+
+	out := mcpVar.ReplaceAllStringFunc(raw, func(match string) string {
+		name := mcpVar.FindStringSubmatch(match)[varGroup]
+
+		value, ok := os.LookupEnv(name)
+		if !ok {
+			missing = fmt.Errorf("%w: %s", errMCPVar, name)
+		}
+
+		return value
+	})
+
+	return out, missing
+}
+
 // executorEnv is the whole environment an executor gets: the whitelist, plus
 // the engine-owned home and the paths that hang off it.
 func executorEnv(home string) []string {
-	own := []string{
+	env := []string{
 		"HOME=" + home,
 		"TERM=dumb",
 		"TMPDIR=" + filepath.Join(home, tmpDir),
@@ -223,86 +327,49 @@ func executorEnv(home string) []string {
 		"XDG_CACHE_HOME=" + filepath.Join(home, xdgCacheDir),
 	}
 
-	return env(own, inherited)
-}
-
-func env(own, keys []string) []string {
-	out := make([]string, len(own), len(own)+len(keys))
-	copy(out, own)
-
-	for _, key := range keys {
+	for _, key := range inherited {
 		if value, ok := os.LookupEnv(key); ok {
-			out = append(out, key+"="+value)
+			env = append(env, key+"="+value)
 		}
 	}
 
-	return out
+	return env
 }
 
-// prepareHome builds the executor's directories and links in the credentials
-// the node's agent family needs.
-func prepareHome(home, work, agent string) error {
-	dirs := []string{
-		work,
-		filepath.Join(home, tmpDir),
-		filepath.Join(home, xdgConfigDir),
-		filepath.Join(home, xdgDataDir),
-		filepath.Join(home, xdgStateDir),
-		filepath.Join(home, xdgCacheDir),
-	}
-
+// prepareHome builds the executor's directories, links in the credentials
+// its harness needs and the host's GitHub access, and copies in its skills.
+func prepareHome(spec execSpec) error {
+	dirs := []string{tmpDir, xdgConfigDir, xdgDataDir, xdgStateDir, xdgCacheDir}
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, dirPerm); err != nil {
+		err := os.MkdirAll(filepath.Join(spec.home, dir), dirPerm)
+		if err != nil {
 			return fmt.Errorf("create executor dir: %w", err)
 		}
 	}
 
-	return linkAuth(home, agent)
-}
-
-// linkAuth symlinks the real user's credentials for the agent's family into
-// the node's home. The real home is resolved from the engine's own
-// environment, which the executor's HOME override never touches.
-func linkAuth(home, agent string) error {
 	realHome, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve real home: %w", err)
 	}
 
-	for _, rel := range authLinks[family(agent)] {
-		err := link(filepath.Join(realHome, rel), filepath.Join(home, rel))
+	for _, rel := range slices.Concat(harnessAuth[spec.harness], githubAuth) {
+		err := link(filepath.Join(realHome, rel), filepath.Join(spec.home, rel))
 		if err != nil {
 			return err
 		}
 	}
 
-	return nil
-}
-
-// family names the credential set the agent needs. An acpx built-in mode is
-// its own family; any other agent value is the agy ACP server command.
-func family(agent string) string {
-	if mode, ok := strings.CutPrefix(agent, acpxBuiltin); ok {
-		return mode
-	}
-
-	return familyAgy
+	return materializeSkills(spec.home, spec.harness, spec.skills)
 }
 
 // link points dst at src, skipping credentials the host does not have.
 func link(src, dst string) error {
-	if !exists(src) {
-		return nil
+	if _, err := os.Lstat(src); err != nil {
+		return nil //nolint:nilerr // a credential the host lacks is skipped
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
 		return fmt.Errorf("create credential dir: %w", err)
-	}
-
-	if exists(dst) {
-		if err := os.Remove(dst); err != nil {
-			return fmt.Errorf("replace auth link: %w", err)
-		}
 	}
 
 	if err := os.Symlink(src, dst); err != nil {
@@ -310,10 +377,4 @@ func link(src, dst string) error {
 	}
 
 	return nil
-}
-
-func exists(path string) bool {
-	_, err := os.Lstat(path)
-
-	return err == nil
 }

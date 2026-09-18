@@ -1,4 +1,4 @@
-// Command gunkata runs a work graph and grades a finished run.
+// Command gunkata runs a kata.
 package main
 
 import (
@@ -14,22 +14,18 @@ import (
 	"syscall"
 
 	"github.com/tenequm/gunkata/internal/engine"
-	"github.com/tenequm/gunkata/internal/grader"
 )
 
 const (
 	exitOK      = 0
 	exitFailure = 1
-	// exitParked is a run that parked. gunkata grade reuses it for a usage
-	// or read error, where no verdict was reached either.
+	// exitParked is a run that parked.
 	exitParked = 2
-	exitUsage  = exitParked
 )
 
 const (
-	runUsage = "usage: gunkata run [--runs-root <dir>] " +
-		"[--input <name>=<path>]... <graph.yaml>"
-	gradeUsage = "usage: gunkata grade --variant pass|fail <runDir>"
+	runUsage = "usage: gunkata run [--runs-root <dir>] <kata.yml> " +
+		"[-p key=value]..."
 	// runsRootFallback is used when XDG_STATE_HOME is unset.
 	runsRootFallback = ".local/state"
 	runsRootSuffix   = "gunkata/runs"
@@ -46,27 +42,27 @@ const (
 var version = "0.0.0-dev"
 
 var (
-	errInputSyntax   = errors.New("--input wants <name>=<path>")
-	errInputRepeated = errors.New("--input names the same input twice")
+	errParamSyntax   = errors.New("-p wants key=value")
+	errParamRepeated = errors.New("-p binds the same param twice")
 )
 
-// inputBindings collects the repeatable --input flag. Each occurrence binds
-// one declared input name to one file on disk.
-type inputBindings map[string]string
+// paramBindings collects the repeatable -p flag. Each occurrence binds one
+// declared param to one value.
+type paramBindings map[string]string
 
-func (inputBindings) String() string { return unset }
+func (paramBindings) String() string { return unset }
 
-func (b inputBindings) Set(raw string) error {
-	name, path, ok := strings.Cut(raw, "=")
-	if !ok || name == unset || path == unset {
-		return fmt.Errorf("%w: %q", errInputSyntax, raw)
+func (b paramBindings) Set(raw string) error {
+	key, value, ok := strings.Cut(raw, "=")
+	if !ok || key == unset {
+		return fmt.Errorf("%w: %q", errParamSyntax, raw)
 	}
 
-	if _, dup := b[name]; dup {
-		return fmt.Errorf("%w: %q", errInputRepeated, name)
+	if _, dup := b[key]; dup {
+		return fmt.Errorf("%w: %q", errParamRepeated, key)
 	}
 
-	b[name] = path
+	b[key] = value
 
 	return nil
 }
@@ -85,9 +81,7 @@ func dispatch(argv []string, out, errOut io.Writer) int {
 
 	switch args[first] {
 	case "run":
-		return runGraph(args[rest:], out, errOut)
-	case "grade":
-		return gradeRun(args[rest:], errOut)
+		return runKata(args[rest:], out, errOut)
 	case "version":
 		fmt.Fprintf(out, "gunkata %s\n", version)
 
@@ -99,28 +93,27 @@ func dispatch(argv []string, out, errOut io.Writer) int {
 
 func usage(errOut io.Writer) int {
 	fmt.Fprintln(errOut, runUsage)
-	fmt.Fprintln(errOut, gradeUsage)
 	fmt.Fprintln(errOut, "usage: gunkata version")
 
 	return exitFailure
 }
 
-// runGraph runs one graph. Stdout carries the run directory and nothing else;
+// runKata runs one kata. Stdout carries the run directory and nothing else;
 // progress goes to stderr, and the exit code carries the outcome.
-func runGraph(args []string, out, errOut io.Writer) int {
+func runKata(args []string, out, errOut io.Writer) int {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	runsRoot := flags.String("runs-root", defaultRunsRoot(),
 		"directory that holds run directories")
-	inputs := inputBindings{}
-	flags.Var(inputs, "input",
-		"bind a declared input: <name>=<path> (repeatable)")
+	params := paramBindings{}
+	flags.Var(params, "p", "bind a declared param: key=value (repeatable)")
 
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseInterleaved(flags, args)
+	if err != nil {
 		return exitFailure
 	}
 
-	if flags.NArg() != oneArg {
+	if len(positional) != oneArg {
 		fmt.Fprintln(errOut, runUsage)
 
 		return exitFailure
@@ -131,13 +124,33 @@ func runGraph(args []string, out, errOut io.Writer) int {
 	defer stop()
 
 	res, err := engine.Run(ctx, engine.Options{
-		GraphPath: flags.Arg(first),
-		RunsRoot:  *runsRoot,
-		Inputs:    inputs,
-		Progress:  errOut,
+		KataPath: positional[first],
+		RunsRoot: *runsRoot,
+		Params:   params,
+		Progress: errOut,
 	})
 
 	return report(res, err, out, errOut)
+}
+
+// parseInterleaved lets flags follow the kata path, as in
+// `gunkata run k.kata.yml -p key=value`; the flag package alone stops at the
+// first positional argument.
+func parseInterleaved(flags *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+
+	for {
+		if err := flags.Parse(args); err != nil {
+			return nil, fmt.Errorf("parse flags: %w", err)
+		}
+
+		if flags.NArg() == empty {
+			return positional, nil
+		}
+
+		positional = append(positional, flags.Arg(first))
+		args = flags.Args()[rest:]
+	}
 }
 
 func report(res engine.Result, err error, out, errOut io.Writer) int {
@@ -153,39 +166,6 @@ func report(res engine.Result, err error, out, errOut io.Writer) int {
 
 	if res.Outcome != engine.OutcomeSucceeded {
 		return exitParked
-	}
-
-	return exitOK
-}
-
-func gradeRun(args []string, errOut io.Writer) int {
-	flags := flag.NewFlagSet("grade", flag.ContinueOnError)
-	flags.SetOutput(errOut)
-	variant := flags.String("variant", unset, "corpus variant: pass or fail")
-
-	if err := flags.Parse(args); err != nil {
-		return exitUsage
-	}
-
-	if flags.NArg() != oneArg || *variant == unset {
-		fmt.Fprintln(errOut, gradeUsage)
-
-		return exitUsage
-	}
-
-	findings, err := grader.Grade(flags.Arg(first), grader.Variant(*variant))
-	if err != nil {
-		fmt.Fprintln(errOut, "gunkata:", err)
-
-		return exitUsage
-	}
-
-	for _, finding := range findings {
-		fmt.Fprintf(errOut, "%s: %s\n", finding.Check, finding.Detail)
-	}
-
-	if len(findings) != empty {
-		return exitFailure
 	}
 
 	return exitOK

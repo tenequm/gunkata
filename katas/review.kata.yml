@@ -1,12 +1,12 @@
 # Review a GitHub PR with /polish in review mode - report only, nothing is edited or pushed.
 #
-# Run: gunkata run katas/review.kata.yml -p repo=<clone url> -p pr=<number>
+# Run: gunkata run katas/review.kata.yml -p pr=https://github.com/<owner>/<repo>/pull/<n>
 #
-# The deliverable is artifacts/review/report.md in the run dir.
+# The deliverable is artifacts/review/report.md in the run dir. The executor reaches
+# GitHub with the host's own gh and git access.
 name: review
 
 params:
-  repo: {}
   pr: {}
 
 agents:
@@ -17,18 +17,16 @@ agents:
     skills:
       - https://github.com/tenequm/skills/tree/main/skills/gh-cli
       - https://github.com/tenequm/skills/tree/main/skills/polish
-    mcps:
-      - https://glim.sh/mcp?apiKey=${GLIM_API_KEY}
+    # mcps:
+    #   - https://glim.sh/mcp?apiKey=${GLIM_API_KEY}
 
 workflow:
 
   review:
     agent: executor
-    pre-steps:
-      - git clone {{param:repo}} {{output:repo}}
     prompt: |
-      Run /polish {{param:pr}} review in the repository at {{output:repo}}. This is
-      review mode: report findings, never edit, commit, push or comment on the PR.
-      No one is available to confirm - running the validation command taken from the
-      base branch is pre-approved. Write the full review report to {{output:report.md}}.
-    outputs: [repo, report.md]
+      Run /polish {{param:pr}} review. This is review mode: report findings, never
+      edit, commit, push or comment on the PR. No one is available to confirm -
+      running the validation command taken from the base branch is pre-approved.
+      Write the full review report to {{output:report.md}}.
+    outputs: [report.md]

@@ -32,8 +32,7 @@ credentials and auth. Every addition is explicitly specified by the step that ne
 The engine's design principles - verified completion, file evidence, per-run isolation,
 park-not-retry, process-tree teardown - live in `docs/spec.md` under Principles.
 
-One rule lives here: a graded corpus grows only from real cases encountered in practice,
-never speculatively, and grader tests never involve a model.
+One rule lives here: engine tests never involve a model - acpx is a stub on PATH.
 
 ## Where things are
 
@@ -44,7 +43,7 @@ never speculatively, and grader tests never involve a model.
   (pre-commit enforces `--check`).
 - `docs/spec.md` - the kata spec, the normative authority on the workflow file format.
   `docs/full.kata.yml` shows the complete surface.
-- `katas/` - real katas, not graded.
+- `katas/` - real katas. Run one with `gunkata run katas/<name>.kata.yml -p key=value`.
 - `packages/gunkata/` - the Go engine (module `github.com/tenequm/gunkata`). All Go tooling
   runs from there; the `just` recipes and the lefthook Go jobs already do.
 
@@ -54,7 +53,7 @@ YAGNI and KISS govern every change while the MVP is being built.
 
 - Build only what the current milestone needs. No speculative features, options, config
   knobs, interfaces, plugin points or abstraction layers "for later" - later earns them
-  when a real case demands them (the same growth rule the corpus follows).
+  when a real case demands them.
 - Prefer the simplest working construction: stdlib over a dependency, a function over an
   interface, one package over three, a literal over a generic. Reach for the complex form
   only when the simple one demonstrably cannot carry the requirement.

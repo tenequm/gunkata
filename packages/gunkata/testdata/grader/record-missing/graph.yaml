@@ -1,5 +1,0 @@
-# A run directory whose engine died before writing record.json.
-nodes:
-  - name: produce
-  - name: gate
-  - name: consume
