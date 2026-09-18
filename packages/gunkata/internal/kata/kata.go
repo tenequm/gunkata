@@ -35,6 +35,7 @@ const (
 	kindArtif  = "artifact"
 	keyProfile = "profile"
 	keyHarness = "harness"
+	keyURL     = "url"
 	singleQ    = '\''
 	doubleQ    = '"'
 	noQuote    = rune(0)
@@ -67,6 +68,8 @@ var (
 	ErrShell        = errors.New("shell syntax in a step")
 	ErrAmendField   = errors.New("agent amendment names an unknown field")
 	ErrAmendHarness = errors.New("harness may not be amended")
+	ErrMCPField     = errors.New("MCP entry names an unknown field")
+	ErrMCPURL       = errors.New("MCP entry declares no url")
 )
 
 // shellTokens are load errors in a step's string form, which is never a
@@ -102,7 +105,14 @@ type Profile struct {
 	TimeoutSeconds int               `yaml:"timeout_seconds"`
 	Options        map[string]string `yaml:"options"`
 	Skills         []string          `yaml:"skills"`
-	MCPs           []string          `yaml:"mcps"`
+	MCPs           []mcpEntry        `yaml:"mcps"`
+}
+
+// mcpEntry is one MCP server. An optional server whose URL references an
+// unset variable is skipped; a required one refuses the run.
+type mcpEntry struct {
+	URL      string `yaml:"url"`
+	Required bool   `yaml:"required"`
 }
 
 // Job is setup, judgment, evidence.
@@ -163,6 +173,40 @@ func (a *agentRef) UnmarshalYAML(node *yaml.Node) error {
 	}
 
 	a.Profile, a.Amend = doc.Profile, doc.Amend
+
+	return nil
+}
+
+// mcpFields are the keys an MCP entry's object form may carry.
+var mcpFields = []string{keyURL, "required"}
+
+// UnmarshalYAML takes a URL or a {url, required} object.
+func (m *mcpEntry) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		m.URL = node.Value
+	} else if err := decodeMCP(node, m); err != nil {
+		return err
+	}
+
+	if m.URL == unset {
+		return ErrMCPURL
+	}
+
+	return nil
+}
+
+func decodeMCP(node *yaml.Node, m *mcpEntry) error {
+	for pair := range len(node.Content) / pairStride {
+		key := node.Content[pair*pairStride].Value
+		if !slices.Contains(mcpFields, key) {
+			return fmt.Errorf(quotedFmt, ErrMCPField, key)
+		}
+	}
+
+	type plain mcpEntry // drops UnmarshalYAML, so Decode does not recurse
+	if err := node.Decode((*plain)(m)); err != nil {
+		return fmt.Errorf("decode MCP entry: %w", err)
+	}
 
 	return nil
 }

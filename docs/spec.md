@@ -20,7 +20,7 @@ agents:                        # a profile fully describes one executor shape
     timeout_seconds: <int>     # optional
     options: {}                # optional harness-specific settings
     skills: []                 # skill dirs: local path or GitHub tree URL
-    mcps: []                   # MCP server URLs
+    mcps: []                   # MCP servers: <url> | {url: <url>, required: <bool>}
 
 workflow:                      # map of jobs = the DAG
   <job>:
@@ -46,10 +46,13 @@ HOME, nothing inherited but subscription auth - and every addition is declared.
   (`https://github.com/<o>/<r>/tree/<ref>/<path>`). The engine fetches it engine-side with
   ambient credentials, resolves the ref to a SHA at run start, snapshots it into the run
   dir (recorded with the SHA), and materializes it where the harness loads skills from.
-- `mcps:` - each entry is an MCP server URL. `${VAR}` placeholders are allowed and expand
-  at executor spawn from the engine's environment - never written expanded anywhere. The
-  engine refuses to start a run if a referenced variable is unset, and fails any job whose
-  transcript shows the server failed to load.
+- `mcps:` - each entry is an MCP server URL, or an object `{url: <url>, required: <bool>}`
+  (no other keys). `${VAR}` placeholders are allowed and expand at executor spawn from the
+  engine's environment - never written expanded anywhere. A server is optional by default:
+  if a referenced variable is unset, the job runs without it, the engine prints a warning,
+  and the job's record lists it under `skipped_mcps`. A `required: true` server with an
+  unset variable makes the engine refuse to start the run. The engine fails any job whose
+  transcript shows a server failed to load.
 - `options:` - harness-specific key=value settings, passed through the adapter.
 
 `agent:` on a job takes the profile name, or an object amending it: `profile:` names the

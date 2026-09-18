@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -534,6 +535,48 @@ workflow:
 	}
 }
 
+// TestRunSkipsAnOptionalMCP holds that an optional server whose variable is
+// unset is left out, warned about and recorded, while the run proceeds.
+func TestRunSkipsAnOptionalMCP(t *testing.T) {
+	stubACPX(t)
+	t.Setenv(mcpVarName, unset)
+	os.Unsetenv(mcpVarName)
+
+	var progress bytes.Buffer
+
+	res, err := Run(context.Background(), Options{
+		KataPath: writeFile(t, filepath.Join(t.TempDir(), "k.kata.yml"), `
+name: k
+agents:
+  a:
+    harness: claude
+    model: m
+    mcps: ["https://mcp.example.com/mcp?key=${`+mcpVarName+`}"]
+workflow:
+  j: {agent: a, prompt: "ACTION=write\nTARGET={{output:o}}", outputs: [o]}
+`),
+		RunsRoot: filepath.Join(t.TempDir(), "runs"),
+		Progress: &progress,
+	})
+	if err != nil || res.Outcome != OutcomeSucceeded {
+		t.Fatalf("Run() = %+v, %v", res, err)
+	}
+
+	home := filepath.Join(res.RunDir, jobsDir, "j", homeDir)
+	if exists(filepath.Join(home, "mcp.json")) || strings.Contains(readFile(t, filepath.Join(home, "argv.txt")), "--mcp-config") {
+		t.Error("the skipped server reached acpx")
+	}
+
+	want := "warning: job j: skipping MCP example: " + mcpVarName + " is unset"
+	if !strings.Contains(progress.String(), want) {
+		t.Errorf("progress = %q, want %q", progress.String(), want)
+	}
+
+	if got := readRecord(t, res.RunDir).Jobs["j"].SkippedMCPs; !slices.Equal(got, []string{"example"}) {
+		t.Errorf("skipped_mcps = %v, want [example]", got)
+	}
+}
+
 // TestRunRejectsBeforeRunning holds that a run which cannot be carried out
 // fails before it creates anything.
 func TestRunRejectsBeforeRunning(t *testing.T) {
@@ -549,7 +592,7 @@ func TestRunRejectsBeforeRunning(t *testing.T) {
 	}{
 		"unbound param":    {"name: k\nparams:\n  p: {}\nworkflow:\n  j: {outputs: [o]}\n", nil, errUnboundParam},
 		"undeclared param": {"name: k\nworkflow:\n  j: {outputs: [o]}\n", map[string]string{"q": "1"}, errUnknownParam},
-		"unset MCP var":    {"name: k\nagents:\n  a: {harness: claude, model: m, mcps: [\"https://x/${" + mcpVarName + "}\"]}\n" + job, nil, errMCPVar},
+		"unset MCP var":    {"name: k\nagents:\n  a: {harness: claude, model: m, mcps: [{url: \"https://x/${" + mcpVarName + "}\", required: true}]}\n" + job, nil, errMCPVar},
 		"skills on codex":  {"name: k\nagents:\n  a: {harness: codex, model: m, skills: [./s]}\n" + job, nil, errSkillDirs},
 		"bad skill URL":    {"name: k\nagents:\n  a: {harness: claude, model: m, skills: [\"https://github.com/o/r\"]}\n" + job, nil, errSkillURL},
 	}

@@ -82,6 +82,9 @@ type jobRecord struct {
 	ExecutorExit *int     `json:"executor_exit"`
 	// Failure names the first piece of evidence that did not pass.
 	Failure string `json:"failure,omitempty"`
+	// SkippedMCPs names the optional MCP servers left out for an unset
+	// variable.
+	SkippedMCPs []string `json:"skipped_mcps,omitempty"`
 }
 
 // layout is one run's directory and the paths inside it.

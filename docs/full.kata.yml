@@ -17,8 +17,12 @@ agents:
     skills:                       # skill dirs, materialized into the bare executor HOME;
       - https://github.com/tenequm/skills/tree/main/skills/gh-cli   # ref SHA-pinned at run start
       - ./skills/local-example                                      # local path works too
-    mcps:                         # MCP server URLs; ${VAR} expands from the engine's
-      - https://glim.sh/mcp?apiKey=${GLIM_API_KEY}                  # env at spawn, never written out
+    mcps:                         # MCP servers; ${VAR} expands from the engine's env at
+                                  # spawn, never written out. Optional by default: an unset
+                                  # var skips the server with a warning, recorded in
+                                  # skipped_mcps; required: true refuses the run instead
+      - {url: "https://glim.sh/mcp?apiKey=${GLIM_API_KEY}", required: true}
+      - https://mcp.deepwiki.com/mcp                                # plain string = optional
 
 workflow:
 

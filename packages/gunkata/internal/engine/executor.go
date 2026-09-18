@@ -43,6 +43,7 @@ const (
 	domainLabels = 2
 	firstLabel   = 0
 	varGroup     = 1
+	allMatches   = -1
 	firstDup     = 2
 	nameDupFmt   = "%s-%d"
 )
@@ -294,6 +295,18 @@ func mcpName(raw string) string {
 	labels := strings.Split(u.Hostname(), ".")
 
 	return labels[max(len(labels)-domainLabels, firstLabel)]
+}
+
+// unsetVar names the first ${VAR} in raw the engine's environment lacks, or
+// is unset when there is none.
+func unsetVar(raw string) string {
+	for _, groups := range mcpVar.FindAllStringSubmatch(raw, allMatches) {
+		if _, ok := os.LookupEnv(groups[varGroup]); !ok {
+			return groups[varGroup]
+		}
+	}
+
+	return unset
 }
 
 // expandMCP substitutes each ${VAR} from the engine's environment.

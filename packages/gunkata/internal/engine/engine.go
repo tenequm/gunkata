@@ -129,19 +129,31 @@ func bindParams(k *kata.Kata, given map[string]string) (
 }
 
 // preflight rejects what would fail mid-run: skills a harness cannot load,
-// MCP variables the environment lacks.
+// variables a required MCP server lacks.
 func preflight(k *kata.Kata) error {
 	if err := checkSkills(k); err != nil {
 		return err
 	}
 
 	for _, job := range k.Jobs() {
-		if job.Executor == nil {
-			continue
-		}
-
-		if _, err := mcpConfigJSON(job.Executor.MCPs); err != nil {
+		if err := checkMCPs(job); err != nil {
 			return fmt.Errorf("job %q: %w", job.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// checkMCPs refuses a required MCP server whose URL references an unset
+// variable; an optional one is skipped at spawn instead.
+func checkMCPs(job *kata.Job) error {
+	if job.Executor == nil {
+		return nil
+	}
+
+	for _, mcp := range job.Executor.MCPs {
+		if name := unsetVar(mcp.URL); mcp.Required && name != unset {
+			return fmt.Errorf("%w: %s", errMCPVar, name)
 		}
 	}
 
@@ -362,7 +374,7 @@ func (s *scheduler) runPrompt(
 		prompt:  kata.Expand(job, job.Prompt, s.params, s.layout.artifacts()),
 		options: p.Options,
 		skills:  skills,
-		mcps:    p.MCPs,
+		mcps:    s.usableMCPs(job, rec),
 		timeout: time.Duration(p.TimeoutSeconds) * time.Second,
 		home:    s.layout.home(job.Name),
 		work:    s.layout.work(job.Name),
@@ -379,6 +391,28 @@ func (s *scheduler) runPrompt(
 	}
 
 	return unset
+}
+
+// usableMCPs is the job's MCP URLs minus the optional servers whose
+// variables are unset, each skip warned about and recorded.
+func (s *scheduler) usableMCPs(job *kata.Job, rec *jobRecord) []string {
+	urls := make([]string, emptyLen, len(job.Executor.MCPs))
+
+	for _, mcp := range job.Executor.MCPs {
+		name := unsetVar(mcp.URL)
+		if name == unset || mcp.Required {
+			urls = append(urls, mcp.URL)
+
+			continue
+		}
+
+		server := mcpName(mcp.URL)
+		rec.SkippedMCPs = append(rec.SkippedMCPs, server)
+		s.logf("warning: job %s: skipping MCP %s: %s is unset",
+			job.Name, server, name)
+	}
+
+	return urls
 }
 
 // present holds an output to what the engine can see on disk: a non-empty

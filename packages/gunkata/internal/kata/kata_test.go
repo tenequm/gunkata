@@ -79,6 +79,31 @@ func TestLoadMergesAmendments(t *testing.T) {
 	}
 }
 
+func TestLoadParsesBothMCPForms(t *testing.T) {
+	t.Parallel()
+
+	k, err := Load(writeKata(t, `
+name: k
+agents:
+  a:
+    harness: claude
+    model: m
+    mcps:
+      - https://a.example/mcp
+      - {url: https://b.example/mcp, required: true}
+workflow:
+  j: {outputs: [o]}
+`))
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	want := []mcpEntry{{URL: "https://a.example/mcp"}, {URL: "https://b.example/mcp", Required: true}}
+	if got := k.Agents["a"].MCPs; !slices.Equal(got, want) {
+		t.Errorf("mcps = %+v, want %+v", got, want)
+	}
+}
+
 func TestLoadDefaultsTheTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -136,6 +161,8 @@ func TestLoadRejectsInvalidKatas(t *testing.T) {
 		"shell pipe":         {head + "workflow:\n  j: {post-steps: [\"cat a | wc\"]}\n", ErrShell},
 		"shell var":          {head + "workflow:\n  j: {post-steps: [\"echo $HOME\"]}\n", ErrShell},
 		"empty argv":         {head + "workflow:\n  j: {post-steps: [[]]}\n", ErrStep},
+		"MCP unknown key":    {"name: k\nagents:\n  a: {harness: c, model: m, mcps: [{url: u, optional: true}]}\nworkflow:\n  j: {outputs: [o]}\n", ErrMCPField},
+		"MCP no url":         {"name: k\nagents:\n  a: {harness: c, model: m, mcps: [{required: true}]}\nworkflow:\n  j: {outputs: [o]}\n", ErrMCPURL},
 		"open quote":         {head + "workflow:\n  j: {post-steps: [\"echo 'a\"]}\n", ErrStep},
 	}
 
