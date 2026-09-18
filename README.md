@@ -5,17 +5,9 @@ isolated, bare executor, and a dependent is released only when the upstream step
 evidence artifact exists and passes its check. Generic and unopinionated out of the box:
 no built-in roles, no built-in prompts.
 
-**Status: milestone 2 passed, first measured review lever landed.** On top of the
-milestone-1 engine, grader and starter corpus, a lens/verify/reconcile DAG reviews a live
-pull request (glim-sh/cuttle#62) end to end: every node releases against its jq evidence
-check, and the reconciled ledger carries every finding with a disposition. Run inputs
-(`--input name=path`, `{{input:<name>}}`) feed the diff in; see
-`graphs/review-cuttle-62.yaml`.
-
-The graph now routes models per work shape and runs each verify blinded, at high
-reasoning effort, in a different model family than the lens it checks. Measured against
-the flat-model baseline, that took the run from one finding nobody re-derived to three
-findings that survive a hostile re-read, with half the raw findings rejected on evidence.
+**Status: engine and grader run real multi-node DAGs; the workflow schema is being
+redesigned from first principles** (see
+`docs/knowledge/decisions/2609-18-graph-schema-v2-ci-shaped-workflow-files.md`).
 
 - [AGENTS.md](AGENTS.md) - design intent, the executor contract, and the seven locks.
 - [docs/](docs/) - requirement documents and the starter corpus case.
