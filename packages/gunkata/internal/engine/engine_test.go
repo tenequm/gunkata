@@ -54,6 +54,9 @@ set -u
 prompt="${@: -1}"
 printf '%s\n' "$@" > "$HOME/argv.txt"
 env | sort > "$HOME/env.txt"
+find "$HOME" -type l | sort | while IFS= read -r l; do
+  printf '%s %s\n' "${l#"$HOME"/}" "$(readlink "$l")"
+done > "$HOME/links.txt"
 if [[ " $* " == *" --mcp-config "* ]]; then cat > "$HOME/mcp.json"; fi
 cat <<'JSONL'
 ` + stubStream + `JSONL
@@ -73,6 +76,13 @@ case "$action" in
   empty)  : > "$target" ;;
   mkdir)  mkdir -p "$target" ;;
   none)   echo "wrote nothing" ;;
+  rotate) # agy's token refresh: the link becomes a file, via a temp file
+    token="$HOME/.gemini/antigravity-acp/acp_token.json"
+    printf 'hello\n' > "$target"
+    printf 'refreshed\n' > "$token.1.tmp"
+    rm "$token"
+    printf 'refreshed\n' > "$token"
+    ;;
   fail)   exit 3 ;;
   hang)
     sleep 600 &
@@ -451,7 +461,7 @@ workflow:
 
 	assertArgv(t, res.RunDir, home)
 	assertExecutorEnv(t, home)
-	assertLinks(t, realHome, home)
+	assertLinks(t, realHome, home, ".claude/.credentials.json", ".config/gh")
 
 	if readFile(t, filepath.Join(home, ".claude", "skills", "local-skill", "SKILL.md")) != "skill" {
 		t.Error("the declared skill was not materialized")
@@ -466,6 +476,66 @@ workflow:
 		if strings.Contains(readFile(t, filepath.Join(res.RunDir, name)), mcpSecret) {
 			t.Errorf("the expanded MCP secret reached %s", name)
 		}
+	}
+}
+
+// TestRunStartsAgyBare holds agy's own shape: the host's ACP server wrapper
+// as acpx's agent, its login linked in, skills in the Gemini home, and no
+// token left once the server has rewritten its link into a file.
+func TestRunStartsAgyBare(t *testing.T) {
+	stubACPX(t)
+
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+
+	auth := harnessAuth[harnessAgy]
+	token := ".gemini/antigravity-acp/acp_token.json"
+
+	for _, rel := range slices.Concat(auth, []string{".claude/.credentials.json", ".gemini/config/skills/host-skill/SKILL.md"}) {
+		writeFile(t, filepath.Join(realHome, rel), "x")
+	}
+
+	kataDir := t.TempDir()
+	writeFile(t, filepath.Join(kataDir, "skills", "local-skill", "SKILL.md"), "skill")
+
+	kataPath := writeFile(t, filepath.Join(kataDir, "k.kata.yml"), `
+name: stub-agy
+agents:
+  stub: {harness: agy, model: stub-model, timeout_seconds: 7, skills: [./skills/local-skill]}
+workflow:
+  produce:
+    agent: stub
+    prompt: |
+      ACTION=rotate
+      TARGET={{output:out.txt}}
+    outputs: [out.txt]
+`)
+
+	res, err := Run(context.Background(), Options{KataPath: kataPath, RunsRoot: filepath.Join(t.TempDir(), "runs")})
+	if err != nil || res.Outcome != OutcomeSucceeded {
+		t.Fatalf("Run() = %+v, %v", res, err)
+	}
+
+	home := filepath.Join(res.RunDir, jobsDir, "produce", homeDir)
+
+	argv := readFile(t, filepath.Join(home, "argv.txt"))
+	if want := "--json-strict\n--agent\nagy-acp-server\nexec\n"; !strings.Contains(argv, want) {
+		t.Errorf("acpx argv = %q, want %q after the global flags", argv, want)
+	}
+
+	skills := filepath.Join(home, ".gemini", "config", "skills")
+	if readFile(t, filepath.Join(skills, "local-skill", "SKILL.md")) != "skill" || exists(filepath.Join(skills, "host-skill")) {
+		t.Error("the Gemini home's skills are not exactly the declared one")
+	}
+
+	assertLinks(t, realHome, home, auth...)
+
+	if exists(filepath.Join(home, token+".1.tmp")) {
+		t.Error("the token's temp file outlived the executor")
+	}
+
+	if readFile(t, filepath.Join(realHome, token)) != "x" {
+		t.Error("the executor wrote through to the real token")
 	}
 }
 
@@ -548,21 +618,32 @@ func assertExecutorEnv(t *testing.T, home string) {
 	}
 }
 
-// assertLinks holds the sole inheritance: the harness's own credentials and
-// the host's GitHub access, never another harness's, never other config.
-func assertLinks(t *testing.T, realHome, home string) {
+// assertLinks holds the sole inheritance: while the executor runs, exactly
+// the harness's own credentials and the host's GitHub access are linked in,
+// never another harness's, never other config; once it is gone, none are left.
+func assertLinks(t *testing.T, realHome, home string, want ...string) {
 	t.Helper()
 
-	for _, rel := range []string{".claude/.credentials.json", ".config/gh"} {
-		target, err := os.Readlink(filepath.Join(home, rel))
-		if err != nil || target != filepath.Join(realHome, rel) {
-			t.Errorf("%s links to %q (%v), want the real home's", rel, target, err)
+	wantLinks := map[string]string{}
+	for _, rel := range want {
+		wantLinks[rel] = filepath.Join(realHome, rel)
+	}
+
+	links := map[string]string{}
+
+	for line := range strings.SplitSeq(readFile(t, filepath.Join(home, "links.txt")), newline) {
+		if rel, target, ok := strings.Cut(line, " "); ok {
+			links[rel] = target
 		}
 	}
 
-	for _, rel := range []string{".codex", ".claude/settings.json", ".onecli", ".config/git"} {
+	if !maps.Equal(links, wantLinks) {
+		t.Errorf("links during the run = %v, want %v", links, wantLinks)
+	}
+
+	for _, rel := range want {
 		if exists(filepath.Join(home, rel)) {
-			t.Errorf("%s crossed into the executor home", rel)
+			t.Errorf("%s outlived the executor in the run dir", rel)
 		}
 	}
 }

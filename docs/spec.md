@@ -42,6 +42,8 @@ Four top-level keys. Seven job keys. Unknown fields are rejected.
 A profile is the executor contract factored out: every executor starts bare - engine-owned
 HOME, nothing inherited but subscription auth - and every addition is declared.
 
+- `harness:` - the acpx agent that runs the job, e.g. `claude`. `agy` is Google
+  Antigravity, which acpx 0.17 lacks: it runs the host's `agy-acp-server` on PATH.
 - `skills:` - each entry is a skill directory: a local path, or a GitHub tree URL
   (`https://github.com/<o>/<r>/tree/<ref>/<path>`). The engine fetches it engine-side with
   ambient credentials, resolves the ref to a SHA at run start, snapshots it into the run

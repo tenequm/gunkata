@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"net/url"
@@ -31,6 +32,7 @@ var stepTimeout = 10 * time.Minute
 const (
 	acpxBin       = "acpx"
 	harnessClaude = "claude"
+	harnessAgy    = "agy"
 	// waitDelay bounds the wait after a kill, so no run hangs on teardown.
 	waitDelay = 5 * time.Second
 	exitOK    = 0
@@ -78,6 +80,20 @@ var harnessAuth = map[string][]string{
 	"codex":       {".codex/auth.json"},
 	// pi reads its provider list, and the key with it, from this one file.
 	"pi": {".pi/agent/models.json"},
+	// settings.json selects the Google-account login; the lib dir is the ACP
+	// server itself, which the host's wrapper finds under HOME.
+	harnessAgy: {
+		".gemini/antigravity-acp/settings.json",
+		".gemini/antigravity-acp/acp_token.json",
+		".local/lib/antigravity-acp",
+	},
+}
+
+// harnessAgent is the acpx agent argument for a harness acpx has no built-in
+// agent for; any other harness is acpx's positional agent name. acpx 0.17
+// lacks Antigravity, so agy runs the host's wrapper around its ACP server.
+var harnessAgent = map[string][]string{
+	harnessAgy: {"--agent", "agy-acp-server"},
 }
 
 // harnessEnv is what a harness needs set to start bare. Claude Code would
@@ -126,6 +142,8 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 	if err != nil {
 		return noExit, fmt.Errorf("%w: %w", errACPXMissing, err)
 	}
+
+	defer dropCredentials(spec)
 
 	if prepErr := prepareHome(spec); prepErr != nil {
 		return noExit, prepErr
@@ -303,8 +321,8 @@ func killGroup(p *os.Process) error {
 	return nil
 }
 
-// acpxArgs builds the invocation: global flags, the harness as acpx's
-// positional agent, then exec with its config options and the prompt.
+// acpxArgs builds the invocation: global flags, the harness's acpx agent,
+// then exec with its config options and the prompt.
 func acpxArgs(spec execSpec, mcpFlags []string) []string {
 	args := []string{
 		"--cwd", spec.work,
@@ -314,8 +332,14 @@ func acpxArgs(spec execSpec, mcpFlags []string) []string {
 		"--format", "json", "--json-strict",
 	}
 
+	agent, ok := harnessAgent[spec.harness]
+	if !ok {
+		agent = []string{spec.harness}
+	}
+
 	args = append(args, mcpFlags...)
-	args = append(args, spec.harness, "exec")
+	args = append(args, agent...)
+	args = append(args, "exec")
 
 	for _, key := range slices.Sorted(maps.Keys(spec.options)) {
 		args = append(args,
@@ -450,7 +474,7 @@ func prepareHome(spec execSpec) error {
 		return fmt.Errorf("resolve real home: %w", err)
 	}
 
-	for _, rel := range slices.Concat(harnessAuth[spec.harness], githubAuth) {
+	for _, rel := range credentialPaths(spec.harness) {
 		err := link(filepath.Join(realHome, rel), filepath.Join(spec.home, rel))
 		if err != nil {
 			return err
@@ -458,6 +482,54 @@ func prepareHome(spec execSpec) error {
 	}
 
 	return materializeSkills(spec.home, spec.harness, spec.skills)
+}
+
+// credentialPaths is everything prepareHome links in for a harness.
+func credentialPaths(harness string) []string {
+	return slices.Concat(harnessAuth[harness], githubAuth)
+}
+
+// dropCredentials removes, once the executor is gone, every credential it was
+// given and any copy it wrote in a link's place: agy refreshes its token by
+// replacing the link with a regular file, via a temp file beside it. Nothing
+// secret may outlive the job in the run dir.
+func dropCredentials(spec execSpec) {
+	for _, rel := range credentialPaths(spec.harness) {
+		if err := dropCredential(filepath.Join(spec.home, rel)); err != nil {
+			spec.log.Error("credential left in the run dir", keyErr, err)
+		}
+	}
+}
+
+// dropCredential removes path and its siblings named path.*, the temp files
+// an atomic rewrite leaves when it is cut short.
+func dropCredential(path string) error {
+	dir, base := filepath.Split(path)
+
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("list %s: %w", dir, err)
+	}
+
+	for _, entry := range entries {
+		if !isCredentialCopy(entry.Name(), base) {
+			continue
+		}
+
+		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+			return fmt.Errorf("remove credential: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func isCredentialCopy(name, base string) bool {
+	return name == base || strings.HasPrefix(name, base+".")
 }
 
 // link points dst at src, skipping credentials the host does not have.
