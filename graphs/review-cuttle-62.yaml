@@ -4,7 +4,7 @@
 #
 # Run: gunkata run --input diff=<path-to-cuttle-pr62.diff> graphs/review-cuttle-62.yaml
 #
-# Shape: 4 independent lenses -> one verify per lens -> one reconcile.
+# Shape: 9 nodes - 4 independent lenses -> one verify per lens -> one reconcile.
 # The lenses find, the verifies re-derive each finding from the actual code
 # (G2/G3), and reconcile keeps every finding exactly once (G5).
 #
@@ -36,7 +36,12 @@
 #                                 effort buys nothing above medium
 #   verify-*                      codex gpt-5.6-sol - a different model family
 #                                 from every lens, so no verifier rules on its
-#                                 own output (self-preference runs over 50%)
+#                                 own output (self-preference runs over 50%) -
+#                                 at reasoning_effort=high, stated per node
+#                                 rather than left to whatever the lane defaults
+#                                 to: verification is the step the whole graph
+#                                 releases on, and run 20260918T001314Ze7ca
+#                                 spent 25-87s per verify at the default
 #   reconcile                     gemini-3.7-flash-medium: a merge, not a
 #                                 judgement
 #
@@ -45,12 +50,6 @@
 # the identical body; the only per-node difference is the findings path they are
 # handed, which is the one residual leak (the path spells its producing node's
 # artifact) and is unchanged from the three-lens version.
-#
-# shadow-* are riders, not steps: each runs its lens's prompt verbatim (a YAML
-# alias, so the two prompts cannot drift) on the free qwen lane via pi. Nothing
-# needs them and they need nothing, so their findings are data to compare
-# against, never evidence anything releases on. A parked shadow node is a
-# result too.
 name: review-cuttle-62
 
 inputs:
@@ -64,7 +63,7 @@ defaults:
 nodes:
   - name: lens-cleanliness
     model: gemini-3.8-flash-medium
-    prompt: &prompt-cleanliness |
+    prompt: |
       You are reviewing one pull request for cleanliness - the junk that should
       not ship. Report findings only; change nothing.
 
@@ -151,7 +150,7 @@ nodes:
   - name: lens-design
     model: gemini-3.8-flash-high
     timeout_seconds: 900
-    prompt: &prompt-design |
+    prompt: |
       You are reviewing one pull request for design and reuse - whether the code
       it adds should have been written at all, and whether it fits the codebase
       it lands in. Report findings only; change nothing.
@@ -255,7 +254,7 @@ nodes:
   - name: lens-efficiency
     model: gemini-3.8-flash-high
     timeout_seconds: 900
-    prompt: &prompt-efficiency |
+    prompt: |
       You are reviewing one pull request for runtime performance and resource
       use. Report findings only; change nothing.
 
@@ -341,7 +340,7 @@ nodes:
   - name: lens-gating
     model: gemini-3.8-flash-high
     timeout_seconds: 900
-    prompt: &prompt-gating |
+    prompt: |
       You are reviewing one pull request for side-effect gating: costly or
       irreversible side-effects that run before the checks meant to gate them.
       Report findings only; change nothing.
@@ -433,6 +432,7 @@ nodes:
     agent: acpx:codex
     model: gpt-5.6-sol
     timeout_seconds: 900
+    config_options: ["reasoning_effort=high"]
     prompt: |
       You are given a set of findings about one pull request and the code they
       are about. Nothing is said about who produced them, what they were looking
@@ -507,6 +507,7 @@ nodes:
     agent: acpx:codex
     model: gpt-5.6-sol
     timeout_seconds: 900
+    config_options: ["reasoning_effort=high"]
     prompt: |
       You are given a set of findings about one pull request and the code they
       are about. Nothing is said about who produced them, what they were looking
@@ -581,6 +582,7 @@ nodes:
     agent: acpx:codex
     model: gpt-5.6-sol
     timeout_seconds: 900
+    config_options: ["reasoning_effort=high"]
     prompt: |
       You are given a set of findings about one pull request and the code they
       are about. Nothing is said about who produced them, what they were looking
@@ -655,6 +657,7 @@ nodes:
     agent: acpx:codex
     model: gpt-5.6-sol
     timeout_seconds: 900
+    config_options: ["reasoning_effort=high"]
     prompt: |
       You are given a set of findings about one pull request and the code they
       are about. Nothing is said about who produced them, what they were looking
@@ -776,38 +779,3 @@ nodes:
       questions. Stop as soon as the file is written.
     artifact: ledger.json
     check: ["jq", "-e", "type == \"array\" and all(.[]; (.disposition == \"confirmed\" or .disposition == \"rejected\" or .disposition == \"duplicate\") and (.disposition != \"duplicate\" or has(\"duplicate_of\")) and has(\"id\"))", "{{artifact}}"]
-
-  # Shadow twins. Same lens prompt, free qwen lane, nothing depends on them.
-  - name: shadow-lens-cleanliness
-    agent: acpx:pi
-    model: litellm/qwen3.8-flash-next
-    # The free lane reasons slowly; 600s parked two of three twins on run
-    # 20260917T230923Z209c.
-    timeout_seconds: 900
-    prompt: *prompt-cleanliness
-    artifact: shadow-lens-cleanliness.json
-    check: *check-findings
-
-  - name: shadow-lens-design
-    agent: acpx:pi
-    model: litellm/qwen3.8-flash-next
-    timeout_seconds: 900
-    prompt: *prompt-design
-    artifact: shadow-lens-design.json
-    check: *check-findings
-
-  - name: shadow-lens-efficiency
-    agent: acpx:pi
-    model: litellm/qwen3.8-flash-next
-    timeout_seconds: 900
-    prompt: *prompt-efficiency
-    artifact: shadow-lens-efficiency.json
-    check: *check-findings
-
-  - name: shadow-lens-gating
-    agent: acpx:pi
-    model: litellm/qwen3.8-flash-next
-    timeout_seconds: 900
-    prompt: *prompt-gating
-    artifact: shadow-lens-gating.json
-    check: *check-findings
