@@ -43,7 +43,10 @@ seconds of each other are not: the first followup's result settles the turn and 
 with results still owed - 3 of 3 runs on 0.76.0 and 2 of 3 on 0.79.0 lost at least one
 agent.[^live] The adapter documents this as an accepted residual.[^adapter] The lead in the
 review run had also not ended its turn: it slept blind for up to four minutes while its
-agents' completion notices queued behind the sleep.[^forensics]
+agents' completion notices queued behind the sleep.[^forensics] This corrects the
+"ending the turn ends the job" reading in
+[the cuttle PR 73 review forensics](/references/2609-19-cuttle-pr73-review-forensics.md):
+the adapter does hold the turn, just not reliably.
 
 # What does wait
 

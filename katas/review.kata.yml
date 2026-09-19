@@ -36,9 +36,7 @@ workflow:
       Keep every checkout and scratch file in your working directory, never in /tmp.
       Polish's parallel review phase is mandatory: launch all four of its review
       agents with the Agent tool in one message, however small the diff. Reviewing
-      the diff yourself instead is a failed run. Launch them in the foreground -
-      never with run_in_background - so the call returns once all four have
-      reported; never sleep or poll to wait for an agent. Name each agent you launched, with
+      the diff yourself instead is a failed run. Name each agent you launched, with
       its finding count, in the report.
       Build each agent's prompt exactly as polish's Phase 3 prescribes: that agent's
       own checklist section from the skill, the diff file path, the changed-file
