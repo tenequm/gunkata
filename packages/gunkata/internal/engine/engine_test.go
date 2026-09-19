@@ -30,17 +30,21 @@ const (
 )
 
 // stubStream is what the stub prints on stdout: an ACP event stream as acpx
-// --format json emits it, with a chatty chunk the log must leave out and two
-// lines that are not JSON, which must cost one warning.
+// --format json emits it, with a chatty chunk the log must leave out, two
+// lines that are not JSON, which must cost one warning, and agent text before
+// the tool call that is not the final message.
 const stubStream = `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"acpx","version":"0.17.0"}}}
 {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentInfo":{"name":"stub-agent","title":"Stub","version":"0.76.0"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Let me look."},"messageId":"m1"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"toolu_1","title":"Terminal","kind":"execute","status":"pending"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_1","title":"ls -la","kind":"execute","status":null}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"pondering"}}}}
 {"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"toolu_1","title":"ls -la","kind":"execute"}}}
 not json
-{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_1","title":null,"kind":null,"status":"completed","rawOutput":"ok"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_1","title":null,"kind":null,"status":"completed","rawOutput":"ok","content":[{"type":"content","content":{"type":"text","text":"ok"}}]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Final "},"messageId":"m2"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","used":100,"size":200000,"cost":{"amount":0.01,"currency":"USD"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"answer.\n"},"messageId":"m2"}}}
 also not json
 {"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":18,"outputTokens":719,"totalTokens":737}}}
 `
@@ -81,6 +85,9 @@ case "$action" in
   empty)  : > "$target" ;;
   mkdir)  mkdir -p "$target" ;;
   none)   echo "wrote nothing" ;;
+  mute)   # a turn that ends on a tool call: no final message
+    printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"toolu_2","title":"Read","kind":"read","status":"completed"}}}'
+    ;;
   rotate) # agy's token refresh: the link becomes a file, via a temp file
     token="$HOME/.gemini/antigravity-acp/acp_token.json"
     printf 'hello\n' > "$target"
@@ -323,8 +330,59 @@ func TestRunPassesAVerifiedDAG(t *testing.T) {
 		t.Error("a deterministic job's home holds more than its work dir")
 	}
 
+	if got := readFile(t, filepath.Join(res.RunDir, artifactsDir, "derive", "message.md")); got != finalMessage {
+		t.Errorf("derive message.md = %q, want %q", got, finalMessage)
+	}
+
+	if exists(filepath.Join(res.RunDir, artifactsDir, "check", "message.md")) {
+		t.Error("a deterministic job has a message.md")
+	}
+
 	assertExecutorOutput(t, filepath.Join(res.RunDir, jobsDir, "derive"))
 	assertRunLog(t, res.RunDir)
+}
+
+// finalMessage is the stub's text after its last tool call.
+const finalMessage = "Final answer.\n"
+
+// messageKata requires the final message of two agent jobs, one of which
+// ends its turn on a tool call, and reads the other's from a dependent.
+const messageKata = `
+name: stub-message
+agents:
+  stub: {harness: claude, model: stub-model}
+workflow:
+  answer:
+    agent: stub
+    prompt: ACTION=none
+    outputs: [message.md]
+    post-steps:
+      - [grep, -qx, "Final answer.", "{{output:message.md}}"]
+  read:
+    needs: [answer]
+    post-steps:
+      - [grep, -qx, "Final answer.", "{{artifact:answer/message.md}}"]
+  mute:
+    agent: stub
+    prompt: ACTION=mute
+    outputs: [message.md]
+`
+
+func TestRunKeepsTheFinalMessage(t *testing.T) {
+	stubACPX(t)
+
+	res := mustRun(t, messageKata, nil)
+	rec := readRecord(t, res.RunDir)
+	assertStates(t, rec, map[string]jobState{"answer": stateDone, "read": stateDone, "mute": stateParked})
+
+	if got := rec.Jobs["mute"].Failure; got != "output message.md is missing or empty" {
+		t.Errorf("mute failure = %q, want the empty message", got)
+	}
+
+	mute := filepath.Join(res.RunDir, artifactsDir, "mute", "message.md")
+	if info, err := os.Stat(mute); err != nil || info.Size() != 0 {
+		t.Errorf("mute message.md = %v, %v; want an empty file", info, err)
+	}
 }
 
 // assertExecutorOutput holds that the event stream is kept verbatim and

@@ -184,6 +184,7 @@ func TestLoadRejectsInvalidKatas(t *testing.T) {
 		"amend unknown":      {head + "workflow:\n  j: {agent: {profile: a, color: red}, prompt: x, outputs: [o]}\n", ErrAmendField},
 		"no evidence":        {head + "workflow:\n  j: {pre-steps: [\"true\"]}\n", ErrNoEvidence},
 		"nested output":      {head + "workflow:\n  j: {outputs: [a/b]}\n", ErrOutputName},
+		"message, no prompt": {head + "workflow:\n  j: {outputs: [message.md]}\n", ErrMessageJob},
 		"duplicate output":   {head + "workflow:\n  j: {outputs: [o, o]}\n", ErrDupOutput},
 		"unknown need":       {head + "workflow:\n  j: {needs: [x], outputs: [o]}\n", ErrUnknownNeed},
 		"cycle":              {head + "workflow:\n  a: {needs: [b], outputs: [o]}\n  b: {needs: [a], outputs: [o]}\n", ErrCycle},

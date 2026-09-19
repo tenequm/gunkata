@@ -31,7 +31,8 @@ workflow:                      # map of jobs = the DAG
     agent: <profile> | {profile: <profile>, <amendments>}   # required iff prompt present
     prompt: |                  # the judgment; the only place a model acts
       ...
-    outputs: [<name>, ...]     # files or directories owed, land in artifacts/<job>/
+    outputs: [<name>, ...]     # files or directories owed, land in artifacts/<job>/;
+                               #   message.md is the agent's final message
     post-steps:                # the done-bit; all exit 0 = verified
       - <step>
 ```
@@ -88,6 +89,15 @@ A job is setup, judgment, evidence:
    only thing that makes a job done; dependents release on nothing else. A job must
    declare at least one output or post-step.
 
+The agent's final message - its text after its last tool call - is an output the engine
+writes: when the executor ends, whatever its exit, it lands atomically in
+`artifacts/<job>/message.md`, before the output checks, replacing anything the agent put
+there. Every agent job gets one, empty or not. Declaring `outputs: [message.md]` is how a
+job requires a non-empty final message, and how it and its dependents reference it
+(`{{output:message.md}}`, `{{artifact:<job>/message.md}}`) - a reference to an undeclared
+output is a load error, as for any other. A job without `prompt` declaring `message.md`
+is a load error.
+
 A job without `prompt` is a deterministic job: no agent, no model, just steps and
 evidence.
 
@@ -112,7 +122,8 @@ Three kinds, expanded in one pass, to absolute paths only:
 - `{{artifact:job/name}}` - an upstream job's output
 
 No content splicing, no expressions, no second pass. Referencing an artifact does not
-create an edge; only `needs:` does.
+create an edge; only `needs:` does. An agent job's final message is the output
+`message.md` (see Jobs), referenced like any other.
 
 To hand a repository between jobs, make the repo itself the artifact: clone into
 `{{output:repo}}`, and let the dependent clone from `{{artifact:<job>/repo}}` - a local,

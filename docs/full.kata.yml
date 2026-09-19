@@ -69,3 +69,19 @@ workflow:
     outputs: [verdict, review.md]
     post-steps:
       - [grep, -qxE, "PASS|FAIL", "{{output:verdict}}"]
+
+  # An agent job whose deliverable is its final message: the engine writes the agent's
+  # text after its last tool call to message.md; declaring it requires it non-empty.
+  summarize:
+    agent: executor
+    needs: [check]
+    prompt: |
+      Read {{artifact:check/review.md}}. Your final message is a three-line summary
+      of it for the changelog.
+    outputs: [message.md]
+
+  # A dependent reads the final message like any other artifact.
+  publish:
+    needs: [summarize]
+    post-steps:
+      - [test, -s, "{{artifact:summarize/message.md}}"]

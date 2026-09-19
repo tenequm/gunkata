@@ -541,6 +541,8 @@ func (s *scheduler) runPrompt(
 		home:    s.layout.home(job.Name),
 		work:    s.layout.work(job.Name),
 		jobDir:  s.layout.jobDir(job.Name),
+		message: filepath.Join(s.layout.artifacts(), job.Name,
+			kata.MessageOutput),
 		// set only for a run with an executor job, which this is
 		privateTmp: *s.privateTmp,
 		log:        log,

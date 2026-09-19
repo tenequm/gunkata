@@ -20,6 +20,10 @@ import (
 // DefaultTimeoutSeconds bounds an executor whose profile declares no timeout.
 const DefaultTimeoutSeconds = 240
 
+// MessageOutput is the output the engine writes an agent job's final message
+// to. A job declares it to require a non-empty one.
+const MessageOutput = "message.md"
+
 // The lint config forbids bare literals, so the ones this package repeats are
 // named here.
 const (
@@ -58,6 +62,7 @@ var (
 	ErrNoEvidence   = errors.New("job declares no output or post-step")
 	ErrOutputName   = errors.New("output must be a single path element")
 	ErrDupOutput    = errors.New("duplicate output")
+	ErrMessageJob   = errors.New(MessageOutput + " needs a prompt")
 	ErrUnknownNeed  = errors.New("needs names an unknown job")
 	ErrCycle        = errors.New("workflow contains a cycle")
 	ErrPlaceholder  = errors.New("unknown placeholder kind")
@@ -430,7 +435,8 @@ func (k *Kata) validateJob(job *Job) error {
 }
 
 // validateShape holds the job to the spec's structure: an agent exactly when
-// there is a prompt, and evidence to verify.
+// there is a prompt, evidence to verify, and a final message only from an
+// agent.
 func validateShape(job *Job) error {
 	if (job.Agent == nil) != (job.Prompt == unset) {
 		return ErrAgentPrompt
@@ -438,6 +444,10 @@ func validateShape(job *Job) error {
 
 	if len(job.Outputs) == emptyLen && len(job.PostSteps) == emptyLen {
 		return ErrNoEvidence
+	}
+
+	if job.Prompt == unset && slices.Contains(job.Outputs, MessageOutput) {
+		return ErrMessageJob
 	}
 
 	return validateOutputs(job.Outputs)

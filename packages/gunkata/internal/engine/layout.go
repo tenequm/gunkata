@@ -257,42 +257,24 @@ func (l *layout) writeRecord(rec *record) error {
 		return fmt.Errorf("encode record: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(l.dir, recordName+".*")
-	if err != nil {
-		return fmt.Errorf("create record temp file: %w", err)
-	}
-
-	if writeErr := writeAndClose(tmp, append(raw, '\n')); writeErr != nil {
-		_ = os.Remove(tmp.Name())
-
-		return writeErr
-	}
-
-	err = os.Rename(tmp.Name(), filepath.Join(l.dir, recordName))
-	if err != nil {
-		_ = os.Remove(tmp.Name())
-
-		return fmt.Errorf("install record: %w", err)
-	}
-
-	return nil
+	return replaceFile(filepath.Join(l.dir, recordName), append(raw, '\n'))
 }
 
 func writeAndClose(file *os.File, raw []byte) error {
 	if _, err := file.Write(raw); err != nil {
 		_ = file.Close()
 
-		return fmt.Errorf("write record: %w", err)
+		return fmt.Errorf("write %s: %w", file.Name(), err)
 	}
 
 	if err := file.Chmod(filePerm); err != nil {
 		_ = file.Close()
 
-		return fmt.Errorf("chmod record: %w", err)
+		return fmt.Errorf("chmod %s: %w", file.Name(), err)
 	}
 
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close record: %w", err)
+		return fmt.Errorf("close %s: %w", file.Name(), err)
 	}
 
 	return nil

@@ -206,6 +206,7 @@ type execSpec struct {
 	home    string
 	work    string
 	jobDir  string // holds the executor's stream and stderr
+	message string // where the agent's final message is written
 	// privateTmp mounts home/tmp over the executor's /tmp.
 	privateTmp bool
 	caches     []string // VAR=dir entries
@@ -370,9 +371,9 @@ func executorCmd(
 	return cmd
 }
 
-// superviseExecutor runs the executor to its end and logs its lifecycle. The
-// prompt is logged by length and MCP servers by name, since the text and the
-// expanded URLs may carry secrets.
+// superviseExecutor runs the executor to its end, logs its lifecycle and
+// keeps its final message. The prompt is logged by length and MCP servers by
+// name, since the text and the expanded URLs may carry secrets.
 func superviseExecutor(
 	ctx context.Context, cmd *exec.Cmd, spec execSpec, events *eventStream,
 ) (int, error) {
@@ -400,7 +401,23 @@ func superviseExecutor(
 	spec.log.Log(ctx, levelFor[err == nil && code == exitOK],
 		"executor exit", keyExit, code, durSince(began))
 
-	return code, err
+	if err != nil {
+		return code, err
+	}
+
+	return code, keepMessage(spec, events.message.String())
+}
+
+// keepMessage writes the agent's final message, empty or not, whatever the
+// executor's exit: it is the job's evidence either way.
+func keepMessage(spec execSpec, message string) error {
+	spec.log.Info("final message", "len", len(message))
+
+	if err := replaceFile(spec.message, []byte(message)); err != nil {
+		return fmt.Errorf("keep final message: %w", err)
+	}
+
+	return nil
 }
 
 func mapped(in []string, fn func(string) string) []string {
@@ -824,7 +841,11 @@ func keepNewerLogin(host, job string) error {
 		return err
 	}
 
-	return replaceFile(target, merged)
+	if err := replaceFile(target, merged); err != nil {
+		return fmt.Errorf("return login to the host: %w", err)
+	}
+
+	return nil
 }
 
 // loginFile is a Claude Code login file, or its mcpOAuth map, with every
@@ -950,7 +971,7 @@ func replaceFile(path string, raw []byte) error {
 
 	tmp, err := os.CreateTemp(dir, base+".gunkata-*")
 	if err != nil {
-		return fmt.Errorf("create login temp file: %w", err)
+		return fmt.Errorf("create temp file: %w", err)
 	}
 
 	if err := writeAndClose(tmp, raw); err != nil {
@@ -962,7 +983,7 @@ func replaceFile(path string, raw []byte) error {
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		_ = os.Remove(tmp.Name())
 
-		return fmt.Errorf("return login to the host: %w", err)
+		return fmt.Errorf("install %s: %w", base, err)
 	}
 
 	return nil
@@ -1035,14 +1056,16 @@ func link(src, dst string) error {
 	return nil
 }
 
-// ACP names the event stream is summarised by. Everything else - message and
-// thought chunks, command lists, session info - stays in the stream only.
+// ACP names the event stream is summarised by. Everything else - thought
+// chunks, command lists, session info - stays in the stream only.
 const (
 	methodUpdate     = "session/update"
 	methodPermission = "session/request_permission"
 	updateTool       = "tool_call"
 	updateToolUpdate = "tool_call_update"
 	updateUsage      = "usage_update"
+	updateMessage    = "agent_message_chunk"
+	contentText      = "text"
 	toolCompleted    = "completed"
 	toolFailed       = "failed"
 )
@@ -1081,6 +1104,13 @@ type acpUpdate struct {
 	SessionUpdate string   `json:"sessionUpdate"`
 	Status        *string  `json:"status"`
 	Cost          *acpCost `json:"cost"`
+	// Content is a message chunk's content block; a tool update's is a list.
+	Content json.RawMessage `json:"content"`
+}
+
+type acpContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 // acpTool is a tool call as updates carry it: any field but the id may be
@@ -1113,6 +1143,9 @@ type eventStream struct {
 	garbled bool // a line that is not JSON has been warned about
 	// versions maps each party of the handshake, by name, to its version.
 	versions map[string]string
+	// message is the agent's text since its last tool call: at the turn's
+	// end, its final message.
+	message strings.Builder
 }
 
 func (e *eventStream) Write(p []byte) (int, error) {
@@ -1187,17 +1220,29 @@ func (e *eventStream) warnGarbled(err error) {
 func (e *eventStream) update(u acpUpdate) {
 	switch u.SessionUpdate {
 	case updateTool:
+		e.message.Reset()
 		t := e.track(u)
 		e.log.Info("tool start", keyTool, u.ID, keyTitle, t.title,
 			keyKind, t.kind)
 		e.maybeEnd(u, t)
 	case updateToolUpdate:
+		e.message.Reset()
 		e.maybeEnd(u, e.track(u))
 	case updateUsage:
 		if u.Cost != nil {
 			e.cost = u.Cost
 		}
-	default: // chunks and session notices stay in the stream only
+	case updateMessage:
+		e.appendMessage(u.Content)
+	default: // thought chunks and session notices stay in the stream only
+	}
+}
+
+// appendMessage adds a message chunk's text to the message so far.
+func (e *eventStream) appendMessage(raw json.RawMessage) {
+	var content acpContent
+	if json.Unmarshal(raw, &content) == nil && content.Type == contentText {
+		e.message.WriteString(content.Text)
 	}
 }
 

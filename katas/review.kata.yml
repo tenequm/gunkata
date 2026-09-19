@@ -2,7 +2,7 @@
 #
 # Run: gunkata run katas/review.kata.yml -p pr=https://github.com/<owner>/<repo>/pull/<n>
 #
-# The deliverable is artifacts/review/report.md in the run dir. The executor reaches
+# The deliverable is artifacts/review/message.md in the run dir. The executor reaches
 # GitHub with the host's own gh and git access. One pass on opus at high effort: a
 # stronger single pass beat three default-effort passes on the same PR.
 name: review
@@ -50,5 +50,5 @@ workflow:
       Never change the checkout the agents read while they run: check conflicts
       with git merge-tree and read base-branch code with git show, never git merge
       or git checkout in that tree.
-      Write the full review report to {{output:report.md}}.
-    outputs: [report.md]
+      Your final message is the full review report.
+    outputs: [message.md]
