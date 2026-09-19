@@ -1,11 +1,11 @@
 ---
 type: Reference
 title: 2026-09-19 report - why a gunkata review missed a bug a session review found (cuttle PR 73)
-description: Dated forensic report comparing /polish reviews of glim-sh/cuttle#73 run through the gunkata review kata and from a Claude Code session, with the same model, effort, skill and prompt; the kata miss traced to lead prompt anchoring, a checkout mutated mid-review and reasoning variance - not tools, MCP, skills, CLAUDE.md, model or effort - plus the wall-time breakdown and the harness and kata changes that followed.
+description: Dated forensic report comparing /polish reviews of glim-sh/cuttle#73 run through the gunkata review kata and from a Claude Code session, with the same model, effort, skill and prompt; the kata miss traced to lead prompt anchoring, a checkout mutated mid-review and reasoning variance - not tools, MCP, skills, CLAUDE.md, model or effort - plus the wall-time breakdown, the harness and kata changes that followed, a 12-run blind-scored measurement, and every later setup scored against it: the review-2 DAG and its 2b (clearance audits) and 2c (hand-off fixes) variants, and the single-agent kata with a concision rule, which leads on key items at the lowest cost.
 tags: [review, kata, polish, forensics, quality, acpx, claude, ground-truth]
 status: stable
 stale_after: "2027-03-19T00:00:00Z"
-generated: { by: claude-code/opus-5, at: "2026-09-19T10:30:00Z" }
+generated: { by: claude-code/opus-5, at: "2026-09-19T15:53:34Z" }
 sources:
   - id: pr
     resource: https://github.com/glim-sh/cuttle/pull/73
@@ -31,6 +31,39 @@ sources:
   - id: skill
     resource: https://github.com/tenequm/skills/tree/main/skills/polish
     title: the polish skill, Phase 3 hand-off rules (snapshot SHA 1cf72df in the run dirs)
+  - id: k1
+    resource: "K1-miss forensics subagent a7df257383b02ac26 in session 93876eaf-..., 2026-09-19; dumps in that session's scratchpad/forensic/"
+    title: why two kata runs cleared K1
+  - id: kata2
+    resource: katas/review-2.kata.yml
+    title: the review-2 kata (repo path; as of commit 9ded112)
+  - id: runs2
+    resource: "review-2 run dirs on ws-pond-01 under ~/.local/state/gunkata/runs/: 20260919T101131Z2028 (run 1), 20260919T104323Za16e (run 2) (record.json, gunkata.log job durations and per-turn cost, artifacts/*)"
+    title: the review-2 runs
+  - id: judge2
+    resource: "Blind judge 2 in session 93876eaf-..., 2026-09-19; rubric.md (judge 1's key, recurring set and core-7 reused verbatim, plus calibration notes) and scores.md in that session's scratchpad/judge2/; X1 = run 2, X3 = run 1, X2/X4 = byte-identical copies of R06/R09"
+    title: blind scoring of the two review-2 reports with judge calibration
+  - id: r2k1
+    resource: "review-2 K1 forensics in session 93876eaf-..., 2026-09-19; scratchpad/r2forensic/k1.md with scripts in k1work/, from the executor-HOME Claude Code transcripts of both runs and the 0217 and session hits"
+    title: why both review-2 runs missed K1
+  - id: r2time
+    resource: "review-2 recall and time forensics in session 93876eaf-..., 2026-09-19; scratchpad/r2forensic/recall-time.md with cc.py, tl.py, per-job timelines tl-*.txt and 0217 extracts k0217-*.md"
+    title: review-2 recall losses, variance and wall time
+  - id: kata3
+    resource: "katas/review-2b.kata.yml and katas/review-2c.kata.yml (repo paths, as of commit 3ac4917); the concision variant is katas/review.kata.yml plus an append_system_prompt Response Shape section, kept in session 93876eaf-...'s scratchpad/terse/review-terse.kata.yml and not committed"
+    title: the review-2b, review-2c and terse katas
+  - id: runs3
+    resource: "run dirs on ws-pond-01 under ~/.local/state/gunkata/runs/: review-2b 20260919T111827Z9cfe and 20260919T111827Z78a9, terse 20260919T125013Z5f50 and 20260919T125015Zd2bb, review-2c 20260919T134941Zc038 (record.json, gunkata.log job durations and per-turn cost, artifacts/*)"
+    title: the review-2b, terse and review-2c runs
+  - id: judge3
+    resource: "Blind judge 3 in session 93876eaf-..., 2026-09-19; scratchpad/judge3/scores.md, scored against judge2/rubric.md verbatim including its calibration notes, with a mid-scoring revision to recurring item l applied to all four reports it affects. Labels Y1/Y2 = the review-2b runs, Y3/Y4 = the terse runs, Y5 = the review-2c run; the mapping was withheld from the judge"
+    title: blind scoring of the review-2b, terse and review-2c reports
+  - id: lensab
+    resource: "Lens A/B in session 93876eaf-..., 2026-09-19; scratchpad/lensab/notes.md - the cleanliness lens on byte-identical prepare artifacts, claude-sonnet-5 (3 runs) against claude-opus-5 (2 runs), with every finding verified against the checkout"
+    title: the sonnet/opus cleanliness-lens A/B
+  - id: lensx
+    resource: "Cross-harness lens runs on ws-pond-01, 2026-09-19: 20260919T142004Zdfaf and 20260919T143630Zcb9c (codex gpt-5.6-sol at reasoning_effort medium and high), 20260919T141905Zf955 (agy gemini-3.7-flash-medium, parked on an empty message.md) and 20260919T142306Zbaa7 (the agy re-run), all on the same prepare artifacts and prompt"
+    title: the codex and agy cleanliness-lens runs
 ---
 
 # What was compared
@@ -223,6 +256,284 @@ Ranked by seconds on the critical path; the first three overlap.[^timing]
 Ruled out: ACP transport, permission round trips (<0.1 s), the private /tmp namespace,
 and the adapter version. Fixed per-call latency is identical (median 3.5 s both paths).
 
+# review-2: polish as gunkata jobs
+
+`katas/review-2.kata.yml` replaces the single lead with polish's phases as jobs:
+`prepare` (Setup, Phases 1-2, base check; writes `pr.md`, `checks.md`, `diff.patch`,
+`changed-files.txt`, `context.md`, `base.md`, facts only) -> four parallel lens jobs
+(cleanliness, design, efficiency, side-effects; polish's checklists verbatim) -> `report`
+(Phases 4-5). Each later job `cp -a`s prepare's checkout into its own working directory, and
+each job's final message is its output (`message.md`).[^kata2] The two measured runs predate
+that last change: run 1 (`20260919T101131Z2028`) gave the lenses prepare's checkout read-only,
+run 2 (`20260919T104323Za16e`) the per-job copies; both wrote `findings.md`/`report.md`.[^runs2]
+
+| Run | K1 | K2 | K3 | Core-7 | Recurring | Findings | Wall | Cost |
+|---|---|---|---|---|---|---|---|---|
+| review-2 run 1 | no (cleared) | yes (exact, main finding) | yes | 5/7 | 18/25 | 26 | 1899 s | $31.54 |
+| review-2 run 2 | no (dropped) | yes (exact, numbered but filed as pre-existing follow-up; broader path as main) | yes | 5/7 | 13/25 | 18 | 1731 s | $29.25 |
+| review-2 (2), vs the 12-run table | 0/2 | 2/2 | 2/2 | 71% | 62% | - | 1815 s median | - |
+
+Per job, run 1 / run 2 (s): prepare 780/670, cleanliness 408/306, design 505/435, efficiency
+443/575, side-effects 714/601, report 402/458.[^runs2] Scores are judge 2's calibrated grades,
+blind to which run produced which report.[^judge2]
+
+- **Judge calibration.** Judge 2 also scored byte-identical copies of R06 and R09 from the
+  12-run table. Calibrated (strict e/f, K2 graded where the finding is numbered) it matched
+  judge 1 on 6/6 key-item grades and on recurring counts within 2/25 (R09 exact, R06 16-18 vs
+  16); raw, 5/6 and +2. The rows above are therefore comparable to the 12-run table at +-2 on
+  recurring.[^judge2]
+- **Quality: no gain, not proven worse.** Recurring 18 and 13 sit inside the single-agent
+  kata range (14-19) and the session range (13-22); n=2. Same model, same checklists, same
+  four samples and the same raw volume (27-28 raw lens findings, as in kata run 0217), so the
+  DAG changed plumbing and added no coverage. The two runs share most misses (union
+  19/25).[^r2time]
+- **Cost: ~1.6x wall and ~1.7x dollars** against the single-lead kata run 0217 (1140 s,
+  $17.8), with 30% more output tokens (215-226k vs 166k).[^r2time]
+
+## Why both runs missed K1
+
+Ranked; evidence vs inference as marked. Thinking was redacted in every transcript, so
+"reasoning" means the written clearance, tool order and per-turn tokens.[^r2k1]
+
+1. **The base fix's rationale was filtered out (evidence of loss; weight inferred, strong).**
+   #93's commit body (`c667868`) describes K1 almost verbatim ("`getOrLaunch` relaunches it.
+   The queued reap then finds the *new* instance"). prepare read it in both runs and wrote only
+   its mechanism into `base.md` (timer-identity parameter, new test); a search of both
+   `base.md` files for "Dead browser|fresh one|relaunch" finds nothing. The prepare prompt's
+   "never write suspected findings, failure scenarios, worked traces" rule caught an
+   author-written scenario. Every hit anywhere framed K1 as "#93 covers this, the PR's guard
+   does not"; every miss treated the two guards as equivalent ("Both are defensible").
+2. **No lens-specific brief (evidence of the prompt difference; weight inferred).** Hit
+   prompts in the session runs and in kata 0217 were lead-written after reading the code:
+   they named `getOrLaunch` as a racer against the timer, timer identity as a gate, and told
+   the agent to verify the author's pool-mode claim. review-2 lenses get the generic
+   checklist (payments, middleware `next()`) plus a facts-only `context.md`; the no-hints
+   rule forbids exactly that steering.
+3. **An author correctness claim sat under a do-not-flag heading (evidence of placement and
+   echoes; causality inferred).** Both `context.md` files filed "pool mode unchanged, per the
+   author" under "known-intentional patterns"; run 1's side-effects and efficiency lenses
+   echo "Pool mode is untouched" in their clearances.
+4. **Incomplete clearances pass unaudited (evidence).** Every miss cleared with a case list
+   that omitted the relaunch-delete path: deadline-present only (run 1 side-effects,
+   efficiency, design); disconnect-and-reschedule only plus a session-only "missing deadline
+   is recreated" rule applied to pool mode (run 2 side-effects); a nil-instance guard
+   misapplied (run 2 design #9, which noticed K1's exact predicate and cleared it). Same
+   shape as the 090454/090634 misses.
+5. **Report validation is one-directional (evidence).** Run 2's report re-tested positive
+   findings with scratch tests, then dropped design #9 on the lens's own word as refactor
+   churn ("walked the reachable paths (as the Design agent did)").
+6. **Base comparison late or absent (evidence of timing).** Hits read the base's competing
+   fix within ~40 s; misses read it after their main reasoning block (run 2 side-effects) or
+   never (run 1 side-effects, efficiency).
+7. **One read gap (evidence).** Run 2 design never opened `pool.go` 700-1000, so never saw
+   `removeProcess` calling `cancelIdleLocked`.
+
+Ruled out: budget (misses spent 430-710 s and 33-52k output tokens vs session hits 246-324 s),
+code visibility (all but run 2 design had `removeProcess` and the `:474` call in their tool
+results), test ability (run 1 read-only and run 2 with repro tests both missed), model and
+effort (all `claude-opus-5`, high). No single lens is reliable: in kata 0217 design hit K1
+while its side-effect agent called the PR's guard "a genuine improvement over the base".[^r2k1]
+
+## Recall and time beyond K1
+
+Ranked causes.[^r2time]
+
+1. **Per-lens sampling variance (dominant).** The same lens prompt raised different items
+   across runs (run 1 design raised h and m, run 2 design did not; run 1 efficiency raised p
+   and t, run 2 raised e instead).
+2. **Report merge and drop losses (verified).** Run 2 kept 18 of 27 raw (6 dropped, 3
+   merged): e and v were raised by lenses and lost when folded into an umbrella "merge state"
+   finding; r (mark spoofable) was dropped by validation judgment in both runs (0/2 vs 6/12
+   earlier). Report drop rate varied 14% (run 1) to 22% (run 2).
+3. **Unaudited lens clearances (verified).** K1, p, h and t were cleared in design #9 and in
+   the lenses' "Checked" sections. p's clearance ("connect cancels the poll") contradicts
+   `context.md` 3.7 ("neither connect nor disconnect is called" on the marked path), and the
+   report copied the false premise into its own text.
+4. **Base drift has no owner (facts verified; recall effect inferred).** `base.md` carried the
+   facts for e, v and x, but no lens checklist asks for merge hazards, and in run 2 only the
+   design lens opened `base.md`.
+5. **Author claims framed as intentional (framing verified, effect mixed).** Run 1's
+   efficiency lens still found p despite the same framing.
+6. **Time: documentation workload and cold re-validation, not throughput.** Throughput is
+   flat (57-82 tok/s per job), tool time negligible (1-11 s per lens). Against 0217: prepare
+   +435..545 s (~60 s `just check`, 200-260 s of exploration including ~95 s of `git show` on
+   each base commit, ~300 s writing and fixing 10 KB `base.md` plus 23 KB `context.md`);
+   fan-out -22..+91 s, side-effects the straggler in both runs; report +134..190 s, starting
+   cold and re-running reproductions the lenses had already run (329 s validating in run 2 vs
+   122 s for 0217's warm lead). Inherent to the DAG: the serial hand-off, the report's cold
+   start (~60-120 s), the straggler.
+
+Ruled out: the hand-off itself losing facts (`context.md` was as pointed as 0217's lead-written
+drift notes, and lenses cite its 3.x items); lens isolation from the lead's conversation
+(0217's subagents also saw only a written prompt).
+
+## Generic kata fixes proposed
+
+None names K1 or this PR.[^r2k1][^r2time]
+
+- **prepare:** quote base commit message bodies verbatim as recorded author text (carved out
+  of the no-scenarios rule) with the tests each added; flag competing fixes where base and PR
+  change the same guard differently; split "intentional choices (don't flag)" from "author
+  claims about behavior (verify)"; list every read, write and delete site of state the diff
+  adds or re-defines, with the concurrent actors that touch it.
+- **Lenses:** a clearance must cite every write and delete site of the state a guard reads,
+  the absent/zero value, and a waiter queued on a lock whose holder changes that state; a
+  noticed-then-cleared divergence becomes a correctness hypothesis with the attempted
+  counterexample; read the base version of every rewritten function first; every lens reads
+  `base.md`, and one lens owns drift against the current base; attach reproduction evidence;
+  cap "Checked" to a list.
+- **Report:** audit clearances and Checked sections, not just positives, or label them
+  "cleared by lens, not validated"; merge only same-mechanism, same-lines findings, keep each
+  source's consequence, and publish a raw-to-final table (kept, merged-into, dropped with
+  reason); re-validate only unreproduced findings.
+- **Time:** move `just check` into a job parallel to the lenses that only the report needs;
+  cap prepare's prose (`base.md` as conflict list plus SHA, subject, files).
+
+These are under test as two variants: review-2b (clearance audits) and review-2c (hand-off
+fixes).
+
+## review-2b and review-2c measured
+
+Blind judge 3 scored five more reports with judge 2's rubric verbatim, calibration notes
+included, against anonymized labels Y1-Y5.[^judge3] The figures below are its calibrated
+pass, so they sit on the same scale as the 12-run table at +-2 on recurring.
+
+| Run | K1 | K2 | K3 | Core-7 | Recurring | Findings | Wall | Cost |
+|---|---|---|---|---|---|---|---|---|
+| review-2b run 1 | miss | miss | hit | 3/7 | 14/25 | 22 numbered + 2 follow-ups, 1 dropped | 1824 s | $32.25 |
+| review-2b run 2 | partial | hit | hit | 3/7 | 12/25 | 14 numbered + 2 follow-ups, 4 dropped | 2389 s | $36.37 |
+| review-2c run 1 | hit | miss | hit | 6/7 | 13/25 | 17 numbered + 2 dropped, 11 clearances | 2713 s | $38.51 |
+
+Per job, review-2b run 1 / run 2 (s): prepare 570/733, cleanliness 429/440, design 602/425,
+efficiency 647/656, side-effects 546/749, report 604/904. review-2c (s): prepare 670, checks
+50, cleanliness 463, design 953, efficiency 911, side-effects 1285, report 755.[^runs3]
+
+**review-2b = review-2 plus clearance audits.**[^kata3] Every lens gets four extra rules: a
+clearance is a claim held to a finding's bar and must cite every write and every delete or
+reset site as `path:line` with the search that established the list; an absent map entry,
+field or record treated as meaningful state requires enumerating every path that can make it
+absent; "it takes the lock, so it is safe" is not a clearance, the waiter's view after the
+state changed under it must be checked; and a guard the diff removes needs a counterexample
+search plus the base commit that introduced it. The report job gains a "cleared by a lens,
+not validated" section.
+
+- **It did not work.** Core-7 fell to 3/7 in both runs (review-2's own runs scored 5/7) and
+  recurring to 14 and 12 of 25, the lowest of any setup measured on this PR. K1 stayed a
+  miss in run 1; run 2 is a partial, and an instructive one: it names the gate
+  (`pool.go:351`, an absent `idleDeadlines` entry reads as due), the crash-relaunch race and
+  main's timer-identity remedy, but on the session-mode deletion path
+  (`sessionIdleWaitLocked`) rather than pool mode's `removeProcess -> cancelIdleLocked` with
+  no launch arm. Right gate, right race shape, right fix, wrong mode.[^judge3]
+- **Neither report used the new section.** No "cleared by a lens, not validated" list appears
+  in either. Adding an output slot for audited clearances did not make the report job produce
+  one, so the rule bought prose in the lenses and nothing downstream.
+- Both reports' own totals disagree with their own contents (run 1 says 20 against 22
+  numbered findings, run 2 says 12 against 14).[^judge3]
+
+**review-2c = review-2b plus hand-off fixes.**[^kata3] prepare now quotes each base commit's
+message body verbatim in a `<commit-message>` block with the tests it added (carved out of
+the no-scenarios rule as recorded author text); flags **Competing fixes** where a base commit
+and the PR change the same guard differently; splits "Intentional choices (don't flag)" from
+"Author claims - verify"; and emits a **State inventory** naming every read, write, delete and
+reset site of the state the diff touches with the search used and the concurrent actors.
+The report job owns **Base drift** as a finding category, merges only same-mechanism
+same-lines findings, and must publish a raw-to-final disposition table. `just check` moved
+into a `checks` job parallel to the lenses, and prepare's prose is capped to terse facts.
+
+- **K1 came back, with the strongest evidence any report has produced**: the full
+  `removeProcess -> cancelIdleLocked` deletion, `pool.go:587` arming only in session mode,
+  and the absent-deadline gate, reproduced by a test that fails 3/3 at the head and passes at
+  the merge base and against main's signature, which also establishes the diff as its
+  origin.[^judge3]
+- **K2 was lost.** The profile deletion appears only as collateral damage inside two other
+  findings and once in the side-effect trace, where it is listed among the side effects the
+  lens judged properly gated. The report never says a non-durable session loses its logins on
+  a routine reap. Judge 3 calls it the closest a miss has come to hit* in these five.
+- **It is the only report with a full raw-to-final table**, accounting for all 29 lens
+  findings, plus an 11-item re-verified clearance list, and its numbered findings, stated
+  total and category counts reconcile.
+- **One likely false clearance, produced by the new machinery.** It clears the driver marker
+  because the parameter "is dropped by `parseConnectionParams` at `http.go:256-258` so it
+  never becomes a Chrome arg". That holds for the valueless spelling only; `?cuttle-driver=1`
+  falls through the `default:` branch onto Chrome's argv, as another report traced. The
+  categorical phrasing turns recurring item g into a false clearance, so a stricter clearance
+  regime still produces confident wrong ones.
+- **Time went up, not down.** Moving `just check` out cost 50 s in its own job and saved
+  little (prepare 670 s against review-2b's 570 and 733), while the per-lens evidence and
+  competing-fix work made the fan-out the new straggler (side-effects 1285 s). The `checks`
+  job is cheap ($0.36) and its post-step asserts prepare's checkout is untouched.
+
+## The concision test: the single-agent kata with a Response Shape rule
+
+The unmodified `katas/review.kata.yml` plus an `append_system_prompt` carrying a Response
+Shape section (shortest response that fully answers, conclusion first, expand only for
+multi-step reasoning, tradeoffs, code or a correctness-changing caveat, cut restatement and
+hedging), ending with a line that tells the lead to paste that same section verbatim at the
+end of every agent prompt it launches. Two runs, in parallel.[^kata3][^runs3]
+
+| Run | K1 | K2 | K3 | Core-7 | Recurring | Findings | Wall | Cost |
+|---|---|---|---|---|---|---|---|---|
+| terse run 1 | hit | hit | hit | 6/7 | 16/25 | 21 numbered + 3 follow-ups, 8 dropped | 992 s | $12.58 |
+| terse run 2 | hit | hit* | hit | 4/7 | 14/25 | 22 numbered, 12 dropped | 1125 s | $15.83 |
+
+- K1 2/2, K2 2/2, K3 2/2 - the only group where every run found every key item. The
+  unmodified kata scored 4/5 on K1 and 4/5 on K2 over five runs; review-2, 2b and 2c together
+  are 1/5 on K1.[^judge3]
+- Both runs came in under the single-agent kata's 1140 s median (992 s and 1125 s) at the
+  lowest cost of anything measured here, and run 1's numbered findings, stated total and
+  category counts reconcile.
+- One error, in run 2: it drops arm-before-re-inject as "safe here, because `idleReap` takes
+  the seed lock `getOrLaunch` holds across the inject". That is on judge 1's list of minor
+  errors, and the other three reports in this batch treat the same placement as a real
+  defect.
+- **n=2.** This is the best-performing setup measured on this PR, and that is a ranking, not
+  a causal claim: the unmodified kata's own five-run group varies 4/5 on the same items, so
+  two runs cannot separate the concision rule from run-to-run variance. What the two runs do
+  establish is that the rule cost nothing: no key item, no recurring recall outside the
+  kata's existing range, and less wall time and money than the kata without it.
+
+## Every setup measured on this PR
+
+| Setup | Runs | K1 | K2 | K3 | Core-7 | Recurring | Median wall | Cost |
+|---|---|---|---|---|---|---|---|---|
+| session subagent | 5 | 5/5 | 4/5 | 5/5 | 86% | 66% | 548 s | not metered |
+| kata, single agent, adapter 0.76.0 | 5 | 4/5 | 4/5 | 5/5 | 77% | 64% | 1140 s | $17.80 (run 0217) |
+| kata, single agent, adapter 0.79.0 | 2 | 1/2 | 1/2 | 2/2 | 79% | 62% | 1159 s | - |
+| kata + Response Shape (terse) | 2 | 2/2 | 2/2 | 2/2 | 71% | 60% | 1059 s | $12.58, $15.83 |
+| review-2 (DAG) | 2 | 0/2 | 2/2 | 2/2 | 71% | 62% | 1815 s | $31.54, $29.25 |
+| review-2b (clearance audits) | 2 | 0/2 (1 partial) | 1/2 | 2/2 | 43% | 52% | 2107 s | $32.25, $36.37 |
+| review-2c (hand-off fixes) | 1 | 1/1 | 0/1 | 1/1 | 86% | 52% | 2713 s | $38.51 |
+
+- No setup has found all three key items in every run of a group except the two terse runs,
+  and no setup has exceeded 66% recurring recall. The ceiling is the same everywhere; what
+  moves is which items each sample happens to raise.
+- The DAG variants cost 2-3x the single-lead kata in wall time and money and have not bought
+  a key item back. K1 in particular is 1/5 across all three DAG variants against 12/14 across
+  the four single-lead groups.
+- Prompt rules aimed at a specific past miss have not transferred: clearance audits (2b)
+  scored the worst core-7 of any setup, and the hand-off fixes (2c) recovered K1 while losing
+  K2. Each variant moves the blind spot rather than shrinking it.
+- The one structural difference that tracks K1 across all 19 runs is who writes the report:
+  single-lead setups, where the reporting agent read the code itself, are 12/14; DAG setups,
+  where it reads only written lens output, are 1/5. That is a correlation over four groups
+  against three, not a demonstrated cause, and review-2c shows a DAG can still cross it.
+
+## One lens, five models
+
+Held out of the setup comparison because it measures a single job, not a review: the
+cleanliness lens was re-run on byte-identical `prepare` artifacts with the prompt verbatim,
+changing only the model. claude-opus-5 found 7 of the 7 verified findings twice; three
+claude-sonnet-5 runs found 1 between them;[^lensab] codex gpt-5.6-sol found 1 plus one item
+opus missed, the same two at `reasoning_effort` medium and at high; agy
+gemini-3.7-flash-medium found none.[^lensx] Two of the three sonnet runs and the agy run
+shipped a confident "no findings" over a Checked section claiming coverage their tool logs
+refute, which a report job cannot distinguish from a clean bill. Details, the per-harness
+traps and the machine-verifiable-Checked recommendation are in
+[the lens model finding](/findings/review-lens-model-choice-and-fabricated-coverage.md); the
+parked agy run in that batch exposed
+[a tool completion arriving after the final message](/findings/tool-completions-can-arrive-after-the-final-message.md),
+fixed in `3ac4917`.
+
 [^pr]: https://github.com/glim-sh/cuttle/pull/73
 [^runs]: the kata run dirs on ws-pond-01
 [^session]: the session-path transcripts, indexed in pond
@@ -232,3 +543,13 @@ and the adapter version. Fixed per-call latency is identical (median 3.5 s both 
 [^judge]: blind judge subagent ac8c0138476a3399f; reports anonymized as R01-R12
 [^timing]: timing forensics subagent a6f62f4994b6fc44a
 [^k1]: K1-miss forensics subagent a7df257383b02ac26, 2026-09-19; dumps in that session's scratchpad/forensic/
+[^kata2]: katas/review-2.kata.yml
+[^runs2]: the review-2 run dirs on ws-pond-01
+[^judge2]: blind judge 2, scratchpad/judge2/scores.md
+[^r2k1]: review-2 K1 forensics, scratchpad/r2forensic/k1.md
+[^r2time]: review-2 recall and time forensics, scratchpad/r2forensic/recall-time.md
+[^kata3]: katas/review-2b.kata.yml, katas/review-2c.kata.yml and the uncommitted terse variant
+[^runs3]: the review-2b, terse and review-2c run dirs
+[^judge3]: blind judge 3, scratchpad/judge3/scores.md; reports anonymized as Y1-Y5
+[^lensab]: the sonnet/opus cleanliness-lens A/B, scratchpad/lensab/notes.md
+[^lensx]: the codex and agy cleanliness-lens runs
