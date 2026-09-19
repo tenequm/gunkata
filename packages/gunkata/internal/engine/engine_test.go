@@ -83,12 +83,15 @@ case "$action" in
     rm "$token"
     printf 'refreshed\n' > "$token"
     ;;
-  refresh|clear) # Claude Code's login write: a temp file renamed over the link
+  refresh|mcp|clear) # Claude Code's login write: a temp file renamed over the link
     login="$HOME/.claude/.credentials.json"
-    expiry=2000
-    if [[ "$action" == clear ]]; then expiry=0; fi
+    case "$action" in
+      refresh) body='{"claudeAiOauth":{"expiresAt":2000},"mcpOAuth":{"a":{"expiresAt":4000},"b":{"expiresAt":3000}}}' ;;
+      mcp)     body='{"claudeAiOauth":{"expiresAt":1000},"mcpOAuth":{"b":{"expiresAt":3000}}}' ;;
+      clear)   body='{"claudeAiOauth":{"expiresAt":0}}' ;;
+    esac
     printf 'hello\n' > "$target"
-    printf '{"claudeAiOauth":{"expiresAt":%s}}\n' "$expiry" > "$login.tmp.1"
+    printf '%s\n' "$body" > "$login.tmp.1"
     mv "$login.tmp.1" "$login"
     for _ in $(seq 100); do [[ -L "$login" ]] && break; sleep 0.05; done
     readlink "$login" > "$HOME/relinked.txt"
@@ -553,13 +556,19 @@ workflow:
 
 // TestRunReturnsClaudeLogin holds that a login Claude Code refreshes in its
 // link's place reaches the host while the executor still runs, and the link
-// comes back; a login it cleared as dead never overwrites the host's.
+// comes back. Each entry - the subscription login, each MCP server's - keeps
+// whichever copy expires later, so a login the host gained meanwhile
+// survives; a login cleared as dead never overwrites the host's.
 func TestRunReturnsClaudeLogin(t *testing.T) {
-	const hostLogin = `{"claudeAiOauth":{"expiresAt":1000}}`
+	const hostLogin = `{"claudeAiOauth":{"expiresAt":1000},` +
+		`"mcpOAuth":{"a":{"expiresAt":5000},"b":{"expiresAt":1000},"c":{"expiresAt":1}}}`
 
 	for action, want := range map[string]string{
-		"refresh": `{"claudeAiOauth":{"expiresAt":2000}}` + newline,
-		"clear":   hostLogin,
+		"refresh": `{"claudeAiOauth":{"expiresAt":2000},` +
+			`"mcpOAuth":{"a":{"expiresAt":5000},"b":{"expiresAt":3000},"c":{"expiresAt":1}}}` + newline,
+		"mcp": `{"claudeAiOauth":{"expiresAt":1000},` +
+			`"mcpOAuth":{"a":{"expiresAt":5000},"b":{"expiresAt":3000},"c":{"expiresAt":1}}}` + newline,
+		"clear": hostLogin,
 	} {
 		t.Run(action, func(t *testing.T) {
 			stubACPX(t)

@@ -64,6 +64,7 @@ const (
 var (
 	errACPXMissing = errors.New("acpx not found on PATH")
 	errMCPVar      = errors.New("MCP URL references an unset variable")
+	errHostLogin   = errors.New("host claude login is not a JSON object")
 )
 
 // mcpVar matches a ${VAR} placeholder in an MCP URL.
@@ -674,7 +675,7 @@ func syncLogin(host, job string) error {
 	return relink(host, job)
 }
 
-// keepNewerLogin writes job's login over host's if it expires later.
+// keepNewerLogin folds job's login into host's, entry by entry.
 func keepNewerLogin(host, job string) error {
 	refreshed, err := os.ReadFile(job)
 	if err != nil {
@@ -691,33 +692,129 @@ func keepNewerLogin(host, job string) error {
 		return fmt.Errorf("read host login: %w", err)
 	}
 
-	if loginExpiry(refreshed) <= loginExpiry(current) {
+	merged, err := mergeLogins(current, refreshed)
+	if err != nil || merged == nil {
+		return err
+	}
+
+	return replaceFile(target, merged)
+}
+
+// loginFile is a Claude Code login file, or its mcpOAuth map, with every
+// entry left opaque: the engine reads expiresAt and nothing else.
+type loginFile map[string]json.RawMessage
+
+const (
+	keyClaudeOAuth = "claudeAiOauth"
+	keyMCPOAuth    = "mcpOAuth"
+)
+
+// mergeLogins is host with each entry of job that expires later - the
+// subscription login and each MCP server's, since both rotate - or nil when
+// none does. Whatever else host holds stays, so a login the host gained
+// while the job ran survives.
+func mergeLogins(host, job []byte) ([]byte, error) {
+	hostFile := parseLogins(host)
+	if hostFile == nil {
+		return nil, errHostLogin
+	}
+
+	jobFile := parseLogins(job)
+	if jobFile == nil {
+		return nil, nil // an unreadable login is never returned
+	}
+
+	changed := keepNewer(hostFile, jobFile, keyClaudeOAuth)
+
+	mcpChanged, err := mergeMCPLogins(hostFile, jobFile)
+	if err != nil || !changed && !mcpChanged {
+		return nil, err
+	}
+
+	raw, err := json.Marshal(hostFile)
+	if err != nil {
+		return nil, fmt.Errorf("encode login: %w", err)
+	}
+
+	return append(raw, lineEnd...), nil
+}
+
+func mergeMCPLogins(host, job loginFile) (bool, error) {
+	hostMCP, err := hostMCPLogins(host)
+	if err != nil {
+		return false, err
+	}
+
+	jobMCP := parseLogins(job[keyMCPOAuth])
+
+	changed := false
+	for name := range jobMCP {
+		changed = keepNewer(hostMCP, jobMCP, name) || changed
+	}
+
+	if !changed {
+		return false, nil
+	}
+
+	raw, err := json.Marshal(hostMCP)
+	if err != nil {
+		return false, fmt.Errorf("encode MCP logins: %w", err)
+	}
+
+	host[keyMCPOAuth] = raw
+
+	return true, nil
+}
+
+// hostMCPLogins is the host's MCP logins, empty when it has none.
+func hostMCPLogins(host loginFile) (loginFile, error) {
+	raw, ok := host[keyMCPOAuth]
+	if !ok {
+		return loginFile{}, nil
+	}
+
+	logins := parseLogins(raw)
+	if logins == nil {
+		return nil, errHostLogin
+	}
+
+	return logins, nil
+}
+
+// parseLogins is raw's entries, or nil when raw is not a JSON object.
+func parseLogins(raw []byte) loginFile {
+	var logins loginFile
+	if json.Unmarshal(raw, &logins) != nil {
 		return nil
 	}
 
-	return replaceFile(target, refreshed)
+	return logins
 }
 
-// claudeLogin* mirror the one field of Claude Code's login file the engine
-// reads; the tokens themselves stay opaque.
-type (
-	claudeLoginFile struct {
-		OAuth claudeOAuth `json:"claudeAiOauth"`
+// keepNewer copies job's entry key into host when it expires later.
+func keepNewer(host, job loginFile, key string) bool {
+	entry, ok := job[key]
+	if !ok || entryExpiry(entry) <= entryExpiry(host[key]) {
+		return false
 	}
-	claudeOAuth struct {
+
+	host[key] = entry
+
+	return true
+}
+
+// entryExpiry is when a login entry's access token expires, in unix ms;
+// noExpiry when there is none to read.
+func entryExpiry(raw json.RawMessage) int64 {
+	var entry struct {
 		ExpiresAt int64 `json:"expiresAt"`
 	}
-)
 
-// loginExpiry is when a Claude Code login's access token expires, in unix
-// ms; noExpiry when there is none to read.
-func loginExpiry(raw []byte) int64 {
-	var login claudeLoginFile
-	if json.Unmarshal(raw, &login) != nil {
+	if json.Unmarshal(raw, &entry) != nil {
 		return noExpiry
 	}
 
-	return login.OAuth.ExpiresAt
+	return entry.ExpiresAt
 }
 
 // replaceFile writes raw over path atomically, owner-only.
