@@ -96,6 +96,10 @@ case "$action" in
     for _ in $(seq 100); do [[ -L "$login" ]] && break; sleep 0.05; done
     readlink "$login" > "$HOME/relinked.txt"
     ;;
+  scratch) # an agent that ignores TMPDIR
+    printf 'scratch\n' > "/tmp/$(field SCRATCH)"
+    ls /tmp > "$target"
+    ;;
   fail)   exit 3 ;;
   hang)
     sleep 600 &
@@ -106,6 +110,34 @@ case "$action" in
   *)      echo "stub: unknown ACTION '$action'" >&2; exit 64 ;;
 esac
 `
+
+// TestMain doubles as the private /tmp helper, since the engine re-execs
+// its own binary - here the test binary - to enter one. It moves the tests'
+// temp dirs off /tmp, which an executor would see replaced by its own.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == PrivateTmpInit {
+		os.Exit(EnterPrivateTmp(os.Args[2:], os.Stderr))
+	}
+
+	os.Exit(runOffTmp(m))
+}
+
+func runOffTmp(m *testing.M) int {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		panic(err)
+	}
+
+	dir, err := os.MkdirTemp(cache, "gunkata-test-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+
+	os.Setenv("TMPDIR", dir)
+
+	return m.Run()
+}
 
 // passKata is a three-job DAG: a deterministic fetch copies a file param, an
 // agent derives from fetch's artifact, and a deterministic check gates on it.
@@ -918,6 +950,65 @@ func TestRunRejectsBeforeRunning(t *testing.T) {
 				t.Errorf("a rejected run created %s", res.RunDir)
 			}
 		})
+	}
+}
+
+func TestRunGivesTheExecutorAPrivateTmp(t *testing.T) {
+	stubACPX(t)
+
+	scratch := "gunkata-probe-" + strconv.Itoa(os.Getpid())
+
+	res := mustRun(t, `
+name: stub-scratch
+agents:
+  stub: {harness: claude, model: m, timeout_seconds: 7}
+workflow:
+  scratch:
+    agent: stub
+    prompt: |
+      ACTION=scratch
+      SCRATCH=`+scratch+`
+      TARGET={{output:tmp.txt}}
+    outputs: [tmp.txt]
+`, nil)
+
+	assertStates(t, readRecord(t, res.RunDir), map[string]jobState{"scratch": stateDone})
+
+	private := filepath.Join(res.RunDir, jobsDir, "scratch", homeDir, tmpDir, scratch)
+	if readFile(t, private) != "scratch\n" {
+		t.Error("the executor's /tmp write did not land in its HOME/tmp")
+	}
+
+	if exists(filepath.Join("/tmp", scratch)) {
+		_ = os.Remove(filepath.Join("/tmp", scratch))
+
+		t.Error("the executor wrote into the host's /tmp")
+	}
+
+	listing := readFile(t, filepath.Join(res.RunDir, artifactsDir, "scratch", "tmp.txt"))
+	if strings.TrimSpace(listing) != scratch {
+		t.Errorf("the executor's /tmp holds %q, want only its own file", listing)
+	}
+}
+
+func TestRunRefusesARunsRootUnderTmp(t *testing.T) {
+	stubACPX(t)
+
+	root := filepath.Join("/tmp", "gunkata-runs-"+strconv.Itoa(os.Getpid()))
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+
+	_, err := Run(context.Background(), Options{
+		KataPath: writeFile(t, filepath.Join(t.TempDir(), "k.kata.yml"),
+			"name: k\nagents:\n  a: {harness: claude, model: m}\n"+
+				"workflow:\n  j: {agent: a, prompt: x, outputs: [o]}\n"),
+		RunsRoot: root,
+	})
+	if !errors.Is(err, errRunsUnderTmp) {
+		t.Errorf("Run() error = %v, want %v", err, errRunsUnderTmp)
+	}
+
+	if exists(root) {
+		t.Errorf("a rejected run created %s", root)
 	}
 }
 

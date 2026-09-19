@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,7 +112,7 @@ func prepare(opts Options) (*kata.Kata, map[string]string, error) {
 		return nil, nil, err
 	}
 
-	if checkErr := preflight(k); checkErr != nil {
+	if checkErr := preflight(k, opts.RunsRoot); checkErr != nil {
 		return nil, nil, checkErr
 	}
 
@@ -201,8 +203,8 @@ func bindParams(k *kata.Kata, given map[string]string) (
 }
 
 // preflight rejects what would fail mid-run: skills a harness cannot load,
-// variables a required MCP server lacks.
-func preflight(k *kata.Kata) error {
+// variables a required MCP server lacks, executors without a private /tmp.
+func preflight(k *kata.Kata, runsRoot string) error {
 	if err := checkSkills(k); err != nil {
 		return err
 	}
@@ -213,7 +215,37 @@ func preflight(k *kata.Kata) error {
 		}
 	}
 
-	return nil
+	if !slices.ContainsFunc(k.Jobs(), hasExecutor) {
+		return nil
+	}
+
+	return checkPrivateTmp(runsRoot)
+}
+
+func hasExecutor(job *kata.Job) bool { return job.Executor != nil }
+
+// sharedTmp is what each executor sees replaced by its own HOME/tmp, since
+// agents write there whatever TMPDIR says.
+const sharedTmp = "/tmp"
+
+var errRunsUnderTmp = errors.New("runs root is under " + sharedTmp +
+	", which each executor sees replaced by its own")
+
+// checkPrivateTmp refuses a run whose executors could not get a private
+// /tmp, rather than let their scratch files leak into the host's: the run
+// dir must not lie under what that /tmp hides, and the host must allow it.
+func checkPrivateTmp(runsRoot string) error {
+	root, err := filepath.Abs(runsRoot)
+	if err != nil {
+		return fmt.Errorf("resolve runs root: %w", err)
+	}
+
+	rel, err := filepath.Rel(sharedTmp, root)
+	if err == nil && !strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("%w: %s", errRunsUnderTmp, root)
+	}
+
+	return probePrivateTmp()
 }
 
 // checkMCPs refuses a required MCP server whose URL references an unset

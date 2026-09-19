@@ -80,6 +80,8 @@ func dispatch(argv []string, out, errOut io.Writer) int {
 	}
 
 	switch args[first] {
+	case engine.PrivateTmpInit:
+		return engine.EnterPrivateTmp(args[rest:], errOut)
 	case "run":
 		return runKata(args[rest:], out, errOut)
 	case "version":

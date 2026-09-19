@@ -30,6 +30,10 @@ var killGrace = 60 * time.Second
 // stepTimeout bounds one pre- or post-step. Tests lower it.
 var stepTimeout = 10 * time.Minute
 
+// PrivateTmpInit is the hidden gunkata subcommand an executor starts
+// through, to get its own /tmp before it becomes acpx.
+const PrivateTmpInit = "__private-tmp"
+
 const (
 	acpxBin       = "acpx"
 	harnessClaude = "claude"
@@ -234,6 +238,12 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 
 	events := &eventStream{log: spec.log, tools: map[string]*toolCall{}}
 	cmd := executorCmd(cmdCtx, bin, spec, mcpConfig)
+
+	err = confinePrivateTmp(cmd, filepath.Join(spec.home, tmpDir))
+	if err != nil {
+		return noExit, err
+	}
+
 	// The file comes first: a line is on disk before it is parsed.
 	cmd.Stdout = io.MultiWriter(feed, events)
 	cmd.Stderr = stderr
@@ -348,7 +358,11 @@ func runGrouped(cmd *exec.Cmd) (int, error) {
 }
 
 func startGrouped(cmd *exec.Cmd) error {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+
+	cmd.SysProcAttr.Setpgid = true
 	cmd.WaitDelay = waitDelay
 	cmd.Cancel = func() error { return killGroup(cmd.Process) }
 
