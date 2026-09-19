@@ -6,7 +6,7 @@
 # prepare (polish Setup, Phase 1, Phase 2, base-branch check) hands facts to four parallel
 # lens jobs (polish Phase 3, one agent each, its checklist verbatim), and report validates
 # their findings and writes the review (polish Phases 4 and 5, review-mode ending).
-# The deliverable is artifacts/report/report.md in the run dir.
+# The deliverable is artifacts/report/message.md in the run dir.
 #
 # prepare's checkout is never worked in: every later job's pre-step copies it into its own
 # working directory, where the agent may build, test and check out other refs. The engine
@@ -181,11 +181,11 @@ workflow:
 
       ## Output
 
-      Write your findings to {{output:findings.md}}: one numbered entry per finding with
+      Your final message is your findings: one numbered entry per finding with
       `path:line` (or a range), what the code does and why it is an issue, tagged
       `(pre-existing)` or `(out of diff)` where that applies. Then a Checked section: what
       you examined and found clean. With no findings, say so and still write Checked.
-    outputs: [findings.md]
+    outputs: [message.md]
 
   design:
     agent: executor
@@ -250,11 +250,11 @@ workflow:
 
       ## Output
 
-      Write your findings to {{output:findings.md}}: one numbered entry per finding with
+      Your final message is your findings: one numbered entry per finding with
       `path:line` (or a range), what the code does and why it is an issue, tagged
       `(pre-existing)` or `(out of diff)` where that applies. Then a Checked section: what
       you examined and found clean. With no findings, say so and still write Checked.
-    outputs: [findings.md]
+    outputs: [message.md]
 
   efficiency:
     agent: executor
@@ -318,11 +318,11 @@ workflow:
 
       ## Output
 
-      Write your findings to {{output:findings.md}}: one numbered entry per finding with
+      Your final message is your findings: one numbered entry per finding with
       `path:line` (or a range), what the code does and why it is an issue, tagged
       `(pre-existing)` or `(out of diff)` where that applies. Then a Checked section: what
       you examined and found clean. With no findings, say so and still write Checked.
-    outputs: [findings.md]
+    outputs: [message.md]
 
   side-effects:
     agent: executor
@@ -385,12 +385,12 @@ workflow:
 
       ## Output
 
-      Write your findings to {{output:findings.md}}: one numbered entry per finding with
+      Your final message is your findings: one numbered entry per finding with
       `path:line` (or a range), what the code does and why it is an issue, tagged
       `(pre-existing)` or `(out of diff)` where that applies. Then a Checked section: the
       side-effects you inventoried, the gates that cover each, and what you traced and found
       clean. With no findings, say so and still write Checked.
-    outputs: [findings.md]
+    outputs: [message.md]
 
   report:
     agent: executor
@@ -404,10 +404,10 @@ workflow:
       you validate their findings against the actual code and write the review.
 
       The review agents' findings:
-      - {{artifact:cleanliness/findings.md}} - Cleanliness
-      - {{artifact:design/findings.md}} - Design & Reuse
-      - {{artifact:efficiency/findings.md}} - Efficiency
-      - {{artifact:side-effects/findings.md}} - Side-Effect Gating
+      - {{artifact:cleanliness/message.md}} - Cleanliness
+      - {{artifact:design/message.md}} - Design & Reuse
+      - {{artifact:efficiency/message.md}} - Efficiency
+      - {{artifact:side-effects/message.md}} - Side-Effect Gating
 
       The facts they worked from, gathered by an earlier job:
       - `repo` in your working directory - your own copy of the PR checkout, at its head,
@@ -551,7 +551,8 @@ workflow:
       **Recommended: <action>** - <one-sentence reason tied to the top finding>
       ```
 
-      Write the full report to {{output:report.md}}.
-    outputs: [report.md]
+      Your final message is the full report.
+    outputs: [message.md]
     post-steps:
-      - [grep, -q, '^\*\*Recommended: ', "{{output:report.md}}"]
+      - [grep, -q, '^\*\*Recommended: ', "{{output:message.md}}"]
+      - git -C {{artifact:prepare/repo}} diff --quiet HEAD
