@@ -508,7 +508,7 @@ func (s *scheduler) runPrompt(
 		skills = append(skills, s.skills[entry])
 	}
 
-	code, err := runExecutor(ctx, execSpec{
+	code, versions, err := runExecutor(ctx, execSpec{
 		harness: p.Harness,
 		model:   p.Model,
 		prompt:  kata.Expand(job, job.Prompt, s.params, s.layout.artifacts()),
@@ -528,6 +528,7 @@ func (s *scheduler) runPrompt(
 	}
 
 	rec.ExecutorExit = &code
+	rec.Versions = versions
 
 	if code != exitOK {
 		return fmt.Sprintf("executor exited %d", code)

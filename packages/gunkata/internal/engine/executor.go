@@ -41,6 +41,10 @@ const (
 	harnessCodex  = "codex"
 	// claudeLogin is Claude Code's subscription login under a HOME.
 	claudeLogin = ".claude/.credentials.json"
+	// claudeTranscripts matches Claude Code's main session transcripts under
+	// a HOME; subagents' sit deeper.
+	claudeTranscripts = ".claude/projects/*/*.jsonl"
+	claudeCodeKey     = "claude-code"
 	// loginPoll is how often a claude executor's login link is checked for
 	// a refresh that replaced it.
 	loginPoll = time.Second
@@ -194,20 +198,22 @@ type execSpec struct {
 }
 
 // runExecutor starts acpx bare - whitelisted environment, engine-owned HOME,
-// its own process group - and reports its exit code. A non-zero code is an
-// answer, not an error; an error means the executor never ran. Its stdout,
-// the ACP event stream, is kept verbatim and summarised into the log as it
-// arrives.
-func runExecutor(ctx context.Context, spec execSpec) (int, error) {
+// its own process group - and reports its exit code and the versions it ran.
+// A non-zero code is an answer, not an error; an error means the executor
+// never ran. Its stdout, the ACP event stream, is kept verbatim and
+// summarised into the log as it arrives.
+func runExecutor(
+	ctx context.Context, spec execSpec,
+) (int, map[string]string, error) {
 	bin, err := exec.LookPath(acpxBin)
 	if err != nil {
-		return noExit, fmt.Errorf("%w: %w", errACPXMissing, err)
+		return noExit, nil, fmt.Errorf("%w: %w", errACPXMissing, err)
 	}
 
 	defer dropCredentials(spec)
 
 	if prepErr := prepareHome(spec); prepErr != nil {
-		return noExit, prepErr
+		return noExit, nil, prepErr
 	}
 
 	stopLoginWatch := watchClaudeLogin(spec)
@@ -215,41 +221,108 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 
 	spec.npmCache, err = sharedNPMCache()
 	if err != nil {
-		return noExit, err
+		return noExit, nil, err
 	}
 
 	mcpConfig, err := mcpConfigJSON(spec.mcps)
 	if err != nil {
-		return noExit, err
+		return noExit, nil, err
 	}
 
 	feed, err := openLog(filepath.Join(spec.jobDir, executorFeed))
 	if err != nil {
-		return noExit, err
+		return noExit, nil, err
 	}
 	defer feed.Close()
 
 	stderr, err := openLog(filepath.Join(spec.jobDir, executorLog))
 	if err != nil {
-		return noExit, err
+		return noExit, nil, err
 	}
 	defer stderr.Close()
 
 	cmdCtx, cancel := context.WithTimeout(ctx, spec.timeout+killGrace)
 	defer cancel()
 
-	events := &eventStream{log: spec.log, tools: map[string]*toolCall{}}
+	events := &eventStream{
+		log: spec.log, tools: map[string]*toolCall{},
+		versions: map[string]string{},
+	}
 	cmd := executorCmd(cmdCtx, bin, spec, mcpConfig)
 
-	if err := maybeConfine(cmd, spec); err != nil {
-		return noExit, err
+	if confineErr := maybeConfine(cmd, spec); confineErr != nil {
+		return noExit, nil, confineErr
 	}
 
 	// The file comes first: a line is on disk before it is parsed.
 	cmd.Stdout = io.MultiWriter(feed, events)
 	cmd.Stderr = stderr
 
-	return superviseExecutor(cmdCtx, cmd, spec, events)
+	code, err := superviseExecutor(cmdCtx, cmd, spec, events)
+
+	return code, executorVersions(spec, events.versions), err
+}
+
+// executorVersions is what the executor ran: acpx and its ACP agent as the
+// stream's handshake names them, plus Claude Code for a claude executor,
+// whose adapter does not say which one it bundles.
+func executorVersions(
+	spec execSpec, versions map[string]string,
+) map[string]string {
+	if spec.harness == harnessClaude {
+		if v := claudeCodeVersion(spec.home); v != unset {
+			versions[claudeCodeKey] = v
+		}
+	}
+
+	if len(versions) == emptyLen {
+		return nil
+	}
+
+	return versions
+}
+
+// claudeCodeVersion is the version Claude Code stamps on its session
+// transcripts under home; unset when there is none.
+func claudeCodeVersion(home string) string {
+	paths, err := filepath.Glob(filepath.Join(home, claudeTranscripts))
+	if err != nil {
+		return unset
+	}
+
+	for _, path := range paths {
+		if v := transcriptVersion(path); v != unset {
+			return v
+		}
+	}
+
+	return unset
+}
+
+// transcriptVersion is the first version a transcript's entries carry. The
+// decoder streams, so an entry of any size is read whole.
+func transcriptVersion(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return unset
+	}
+	defer file.Close()
+
+	dec := json.NewDecoder(file)
+
+	for {
+		var entry struct {
+			Version string `json:"version"`
+		}
+
+		if dec.Decode(&entry) != nil {
+			return unset
+		}
+
+		if entry.Version != unset {
+			return entry.Version
+		}
+	}
 }
 
 // maybeConfine gives the executor its own /tmp when the run has one.
@@ -956,11 +1029,20 @@ type acpMessage struct {
 type acpParams struct {
 	Update   acpUpdate `json:"update"`
 	ToolCall acpTool   `json:"toolCall"`
+	// ClientInfo is acpx naming itself in the initialize request.
+	ClientInfo *acpInfo `json:"clientInfo"`
 }
 
 type acpResult struct {
 	StopReason string           `json:"stopReason"`
 	Usage      map[string]int64 `json:"usage"`
+	// AgentInfo is the ACP agent naming itself in its initialize response.
+	AgentInfo *acpInfo `json:"agentInfo"`
+}
+
+type acpInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 type acpUpdate struct {
@@ -999,6 +1081,8 @@ type eventStream struct {
 	tools   map[string]*toolCall
 	cost    *acpCost
 	garbled bool // a line that is not JSON has been warned about
+	// versions maps each party of the handshake, by name, to its version.
+	versions map[string]string
 }
 
 func (e *eventStream) Write(p []byte) (int, error) {
@@ -1046,7 +1130,17 @@ func (e *eventStream) handle(line []byte) {
 			keyTitle, deref(tool.Title), keyKind, deref(tool.Kind))
 	case msg.Result.StopReason != unset:
 		e.turnEnd(msg.Result)
+	case msg.Params.ClientInfo != nil:
+		e.version(msg.Params.ClientInfo)
+	case msg.Result.AgentInfo != nil:
+		e.version(msg.Result.AgentInfo)
 	default: // the rest stays in the stream only
+	}
+}
+
+func (e *eventStream) version(info *acpInfo) {
+	if info.Name != unset && info.Version != unset {
+		e.versions[info.Name] = info.Version
 	}
 }
 

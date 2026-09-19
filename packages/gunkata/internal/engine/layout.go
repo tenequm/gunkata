@@ -86,6 +86,9 @@ type jobRecord struct {
 	StartedAt    *string  `json:"started_at"`
 	FinishedAt   *string  `json:"finished_at"`
 	ExecutorExit *int     `json:"executor_exit"`
+	// Versions maps what the executor ran - acpx, its ACP agent and, for
+	// claude, Claude Code - to the version it ran.
+	Versions map[string]string `json:"versions,omitempty"`
 	// Failure names the first piece of evidence that did not pass.
 	Failure string `json:"failure,omitempty"`
 	// SkippedMCPs names the optional MCP servers left out for an unset

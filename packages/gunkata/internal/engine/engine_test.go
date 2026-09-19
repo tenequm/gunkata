@@ -32,7 +32,8 @@ const (
 // stubStream is what the stub prints on stdout: an ACP event stream as acpx
 // --format json emits it, with a chatty chunk the log must leave out and two
 // lines that are not JSON, which must cost one warning.
-const stubStream = `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1}}
+const stubStream = `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"acpx","version":"0.17.0"}}}
+{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentInfo":{"name":"stub-agent","title":"Stub","version":"0.76.0"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"toolu_1","title":"Terminal","kind":"execute","status":"pending"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_1","title":"ls -la","kind":"execute","status":null}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"pondering"}}}}
@@ -58,6 +59,10 @@ find "$HOME" -type l | sort | while IFS= read -r l; do
   printf '%s %s\n' "${l#"$HOME"/}" "$(readlink "$l")"
 done > "$HOME/links.txt"
 if [[ " $* " == *" --mcp-config "* ]]; then cat > "$HOME/mcp.json"; fi
+# Claude Code's session transcript: the version sits on a later entry.
+mkdir -p "$HOME/.claude/projects/work"
+printf '{"type":"queue"}\n{"type":"user","version":"2.1.257"}\n' \
+  > "$HOME/.claude/projects/work/session.jsonl"
 cat <<'JSONL'
 ` + stubStream + `JSONL
 echo "stub acpx stderr marker" >&2
@@ -296,8 +301,13 @@ func TestRunPassesAVerifiedDAG(t *testing.T) {
 		t.Errorf("derive executor_exit = %v, want 0", code)
 	}
 
-	if rec.Jobs["check"].ExecutorExit != nil {
-		t.Error("a deterministic job recorded an executor exit")
+	wantVersions := map[string]string{"acpx": "0.17.0", "stub-agent": "0.76.0", claudeCodeKey: "2.1.257"}
+	if got := rec.Jobs["derive"].Versions; !maps.Equal(got, wantVersions) {
+		t.Errorf("derive versions = %v, want %v", got, wantVersions)
+	}
+
+	if rec.Jobs["check"].ExecutorExit != nil || rec.Jobs["check"].Versions != nil {
+		t.Error("a deterministic job recorded an executor exit or versions")
 	}
 
 	snapshot := filepath.Join(res.RunDir, paramsDir, "seed", "seed.txt")
@@ -564,6 +574,10 @@ workflow:
 	}
 
 	home := filepath.Join(res.RunDir, jobsDir, "produce", homeDir)
+
+	if _, ok := readRecord(t, res.RunDir).Jobs["produce"].Versions[claudeCodeKey]; ok {
+		t.Error("an agy job recorded a Claude Code version")
+	}
 
 	argv := readFile(t, filepath.Join(home, "argv.txt"))
 	if want := "--json-strict\n--agent\nagy-acp-server\nexec\n"; !strings.Contains(argv, want) {
