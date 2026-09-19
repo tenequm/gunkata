@@ -1,5 +1,8 @@
 // Package kata loads and validates gunkata katas, the workflow files
-// docs/spec.md defines.
+// docs/spec.md defines. The kata file's shapes are its whole API, and none of
+// them is inlineable, so the public-struct count is over revive's default.
+//
+//nolint:revive // max-public-structs: six shapes, one per thing a kata declares
 package kata
 
 import (
@@ -37,6 +40,10 @@ const (
 	kindParam  = "param"
 	kindOutput = "output"
 	kindArtif  = "artifact"
+	kindFanOut = "fanout"
+	kindItem   = "item"
+	// minRound is the smallest legal fan-out cap: a head that runs once.
+	minRound   = 1
 	keyProfile = "profile"
 	keyHarness = "harness"
 	keyURL     = "url"
@@ -78,13 +85,30 @@ var (
 	ErrMCPField     = errors.New("MCP entry names an unknown field")
 	ErrMCPURL       = errors.New("MCP entry declares no url")
 	ErrACPAdapter   = errors.New("acp_adapter must be one npm package spec")
+	ErrJobName      = errors.New("job name must be letters, digits, - or _")
+	ErrFanItems     = errors.New("fan-out items must name an output of the job")
+	ErrFanJob       = errors.New("fan-out job names an unknown job")
+	ErrFanSelf      = errors.New("fan-out job may not be the job itself")
+	ErrFanShared    = errors.New("job is the template of more than one fan-out")
+	ErrFanNested    = errors.New("a fan-out template may not fan out itself")
+	ErrFanNeeds     = errors.New("a fan-out template may not declare needs")
+	ErrFanNeeded    = errors.New("needs names a fan-out template")
+	ErrFanRounds    = errors.New("fan-out max_rounds must be at least 1")
+	ErrFanMaxItems  = errors.New("fan-out max_items must be at least 1")
+	ErrFanOutRef    = errors.New(
+		"fanout placeholder names no fan-out head or template")
+	ErrFanArtifact = errors.New(
+		"a fan-out head or template has no single artifact directory")
+	ErrItemRef = errors.New("{{item}} is only for a fan-out template")
 )
 
 // shellTokens are load errors in a step's string form, which is never a
 // shell.
 var shellTokens = []string{"|", ">", "<", "&&", ";", "$", "`"}
 
-// paramName keeps a param key safe as a run-dir path element.
+// paramName keeps a param key safe as a run-dir path element. A job name is
+// held to the same shape, so the engine's own instance keys - which carry
+// path separators - can never be spelled by a kata.
 var paramName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // acpAdapter is one npm package spec, optionally versioned: nothing that
@@ -92,8 +116,9 @@ var paramName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var acpAdapter = regexp.MustCompile(
 	`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*(@[A-Za-z0-9._^~<>=|*-]+)?$`)
 
-// placeholder matches any {{kind:ref}}; the kind is checked at load.
-var placeholder = regexp.MustCompile(`\{\{([a-z]+):([^}]*)\}\}`)
+// placeholder matches any {{kind:ref}}, or a bare {{kind}} for the ref-less
+// {{item}}; the kind is checked at load.
+var placeholder = regexp.MustCompile(`\{\{([a-z]+)(?::([^}]*))?\}\}`)
 
 // Kata is a declared choreography: params, executor profiles, and the DAG.
 type Kata struct {
@@ -141,11 +166,42 @@ type Job struct {
 	Prompt    string    `yaml:"prompt"`
 	Outputs   []string  `yaml:"outputs"`
 	PostSteps []Step    `yaml:"post-steps"`
-	// Name is the job's key in the workflow.
+	// FanOut makes the job a round head: the engine reads its items output
+	// after each round and runs the template job once per item.
+	FanOut *FanOut `yaml:"fan-out"`
+	// Name is the job's key in the workflow, or - for an instance the engine
+	// derives at runtime - that key plus its round and item.
 	Name string `yaml:"-"`
+	// Template is set on the job a fan-out names: it is never scheduled on
+	// its own.
+	Template bool `yaml:"-"`
+	// Item is the absolute path of the work item an instance was given;
+	// {{item}} expands to it.
+	Item string `yaml:"-"`
 	// Executor is the job's profile with its amendments merged, resolved at
 	// load; nil for a deterministic job.
 	Executor *Profile `yaml:"-"`
+}
+
+// FanOut declares runtime fan-out: after each round the engine reads the
+// entries of the head's items directory and runs Job once per entry. A round
+// that yields no entry ends the loop, and MaxRounds bounds it either way.
+type FanOut struct {
+	Items     string `yaml:"items"`
+	Job       string `yaml:"job"`
+	MaxRounds int    `yaml:"max_rounds"`
+	MaxItems  int    `yaml:"max_items"`
+}
+
+// ItemsOutput is the head's items output, or unset on any other job. An
+// empty items directory is the loop's terminating answer, so it is the one
+// output exempt from the non-empty check.
+func (job *Job) ItemsOutput() string {
+	if job.FanOut == nil {
+		return unset
+	}
+
+	return job.FanOut.Items
 }
 
 // agentRef names a profile, optionally amending it.
@@ -373,6 +429,10 @@ func (k *Kata) validate() error {
 		return err
 	}
 
+	if err := k.resolveFanOut(); err != nil {
+		return err
+	}
+
 	for _, job := range k.Jobs() {
 		if err := k.validateJob(job); err != nil {
 			return fmt.Errorf(jobErrFmt, job.Name, err)
@@ -383,7 +443,83 @@ func (k *Kata) validate() error {
 }
 
 // validateDecls holds the params and profiles to what they may declare.
+// resolveFanOut marks every job a fan-out names as a template and holds each
+// declaration to what the engine can schedule. It runs before the per-job
+// pass, which needs the marks to resolve {{fanout:}} and {{item}}.
+func (k *Kata) resolveFanOut() error {
+	for _, job := range k.Jobs() {
+		if job.FanOut == nil {
+			continue
+		}
+
+		tmpl, err := k.fanOutTemplate(job)
+		if err != nil {
+			return fmt.Errorf(jobErrFmt, job.Name, err)
+		}
+
+		tmpl.Template = true
+	}
+
+	return k.validateTemplates()
+}
+
+// fanOutTemplate holds one fan-out declaration to a template the engine can
+// instantiate, and returns it.
+func (k *Kata) fanOutTemplate(job *Job) (*Job, error) {
+	f := job.FanOut
+	tmpl := k.Workflow[f.Job]
+
+	switch {
+	case !slices.Contains(job.Outputs, f.Items):
+		return nil, fmt.Errorf(quotedFmt, ErrFanItems, f.Items)
+	case f.MaxRounds < minRound:
+		return nil, ErrFanRounds
+	case f.MaxItems < minRound:
+		return nil, ErrFanMaxItems
+	case tmpl == nil:
+		return nil, fmt.Errorf(quotedFmt, ErrFanJob, f.Job)
+	case tmpl == job:
+		return nil, ErrFanSelf
+	case tmpl.Template:
+		return nil, fmt.Errorf(quotedFmt, ErrFanShared, f.Job)
+	}
+
+	return tmpl, nil
+}
+
+// validateTemplates holds a template to a job the engine alone schedules:
+// nothing needs it, it needs nothing, and it does not fan out in turn.
+func (k *Kata) validateTemplates() error {
+	for _, job := range k.Jobs() {
+		for _, need := range job.Needs {
+			if dep := k.Workflow[need]; dep != nil && dep.Template {
+				return fmt.Errorf(jobErrFmt, job.Name,
+					fmt.Errorf(quotedFmt, ErrFanNeeded, need))
+			}
+		}
+
+		if !job.Template {
+			continue
+		}
+
+		switch {
+		case job.FanOut != nil:
+			return fmt.Errorf(jobErrFmt, job.Name, ErrFanNested)
+		case len(job.Needs) != emptyLen:
+			return fmt.Errorf(jobErrFmt, job.Name, ErrFanNeeds)
+		}
+	}
+
+	return nil
+}
+
 func (k *Kata) validateDecls() error {
+	for name := range k.Workflow {
+		if !paramName.MatchString(name) {
+			return fmt.Errorf(quotedFmt, ErrJobName, name)
+		}
+	}
+
 	for name := range k.Params {
 		if !paramName.MatchString(name) {
 			return fmt.Errorf(quotedFmt, ErrParamName, name)
@@ -570,6 +706,15 @@ func (k *Kata) validateRef(job *Job, kind, ref string) error {
 		}
 	case kindArtif:
 		return k.validateArtifactRef(ref)
+	case kindFanOut:
+		if target := k.Workflow[ref]; target == nil ||
+			(target.FanOut == nil && !target.Template) {
+			return fmt.Errorf(quotedFmt, ErrFanOutRef, ref)
+		}
+	case kindItem:
+		if ref != unset || !job.Template {
+			return ErrItemRef
+		}
 	default:
 		return fmt.Errorf(quotedFmt, ErrPlaceholder, kind)
 	}
@@ -582,6 +727,10 @@ func (k *Kata) validateArtifactRef(ref string) error {
 	target, out, ok := strings.Cut(ref, refSep)
 	if !ok || k.Workflow[target] == nil {
 		return fmt.Errorf(quotedFmt, ErrArtifactRef, ref)
+	}
+
+	if k.Workflow[target].FanOut != nil || k.Workflow[target].Template {
+		return fmt.Errorf(quotedFmt, ErrFanArtifact, ref)
 	}
 
 	if !slices.Contains(k.Workflow[target].Outputs, out) {
@@ -633,8 +782,9 @@ func (k *Kata) visit(job *Job, state map[string]visit) error {
 }
 
 // Expand replaces every placeholder in s from job's point of view: params
-// with their bound values, outputs and artifacts with absolute paths under
-// artifactsDir. It runs after validation, so every reference resolves.
+// with their bound values, outputs, artifacts and fan-out trees with absolute
+// paths under artifactsDir, and {{item}} with the instance's work item. It
+// runs after validation, so every reference resolves.
 func Expand(
 	job *Job, s string, params map[string]string, artifactsDir string,
 ) string {
@@ -647,6 +797,8 @@ func Expand(
 			return params[ref]
 		case kindOutput:
 			return filepath.Join(artifactsDir, job.Name, ref)
+		case kindItem:
+			return job.Item
 		default:
 			return filepath.Join(artifactsDir, ref)
 		}

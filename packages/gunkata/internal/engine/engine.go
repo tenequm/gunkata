@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -40,7 +41,13 @@ const (
 	keyTitle = "title"
 	keyKind  = "kind"
 	keyTool  = "tool"
+	keyRound = "round"
+	keyItems = "items"
 )
+
+// firstRound is the number the engine gives a fan-out's first round; rounds
+// and items are numbered from one wherever they are named.
+const firstRound = 1
 
 var (
 	errUnknownParam   = errors.New("no such param is declared by the kata")
@@ -351,6 +358,12 @@ type scheduler struct {
 	// settled is closed per job once its record is final.
 	settled      map[string]chan struct{}
 	skillSources map[string]string
+	// mu guards the records the engine creates at runtime: a fan-out's
+	// instances and each head's loop summary. Nothing needs them by name, so
+	// only the head's goroutine writes and only record() reads.
+	mu      sync.Mutex
+	dynamic map[string]*jobRecord
+	fanOuts map[string]*fanOutRecord
 	// privateTmp is whether executors get their own /tmp; nil when the run
 	// has no executor. tmpReason says why not.
 	privateTmp *bool
@@ -369,9 +382,17 @@ func newScheduler(
 		log:     log,
 		jobs:    make(map[string]*jobRecord, len(k.Workflow)),
 		settled: make(map[string]chan struct{}, len(k.Workflow)),
+		dynamic: map[string]*jobRecord{},
+		fanOuts: map[string]*fanOutRecord{},
 	}
 
-	for name := range k.Workflow {
+	// A template is scheduled only by its fan-out, so it gets no record and
+	// no settled channel of its own: its instances carry both.
+	for name, job := range k.Workflow {
+		if job.Template {
+			continue
+		}
+
 		s.jobs[name] = &jobRecord{State: statePending}
 		s.settled[name] = make(chan struct{})
 	}
@@ -386,6 +407,10 @@ func (s *scheduler) execute(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	for _, job := range s.kata.Jobs() {
+		if job.Template {
+			continue
+		}
+
 		wg.Go(func() {
 			defer close(s.settled[job.Name])
 
@@ -397,14 +422,27 @@ func (s *scheduler) execute(ctx context.Context) {
 }
 
 // runJob waits for the job's needs and, if they were verified, attempts it
-// exactly once.
+// exactly once - or, for a fan-out head, runs its rounds.
 func (s *scheduler) runJob(ctx context.Context, job *kata.Job) {
 	log := s.log.With(keyJob, job.Name)
 	if !s.needsDone(ctx, job, log) {
 		return // stays pending; nothing of it runs and nothing is created
 	}
 
-	rec := s.jobs[job.Name]
+	if job.FanOut != nil {
+		s.runRounds(ctx, job, log)
+
+		return
+	}
+
+	s.attempt(ctx, job, s.jobs[job.Name], log)
+}
+
+// attempt runs one job - declared or an instance the engine derived - exactly
+// once, and settles its record.
+func (s *scheduler) attempt(
+	ctx context.Context, job *kata.Job, rec *jobRecord, log *slog.Logger,
+) {
 	began := time.Now()
 	rec.StartedAt = stampPtr(began)
 
@@ -474,7 +512,15 @@ func (s *scheduler) evaluate(
 }
 
 func (s *scheduler) checkOutputs(job *kata.Job, log *slog.Logger) string {
+	// A fan-out's items directory is the one output allowed to be empty:
+	// zero items is the loop's terminating answer, not a missing deliverable.
+	items := job.ItemsOutput()
+
 	for _, out := range job.Outputs {
+		if out == items {
+			continue
+		}
+
 		ok := present(filepath.Join(s.layout.artifacts(), job.Name, out))
 		log.Log(context.Background(), levelFor[ok], "output",
 			"output", out, "present", ok)
@@ -624,6 +670,10 @@ func present(path string) bool {
 
 // record assembles the run's account of itself.
 func (s *scheduler) record(started, finished time.Time) *record {
+	jobs := make(map[string]*jobRecord, len(s.jobs)+len(s.dynamic))
+	maps.Copy(jobs, s.jobs)
+	maps.Copy(jobs, s.dynamic)
+
 	rec := &record{
 		RunID:      s.layout.id,
 		Kata:       s.kata.Name,
@@ -633,10 +683,15 @@ func (s *scheduler) record(started, finished time.Time) *record {
 		Skills:     s.skillSources,
 		PrivateTmp: s.privateTmp,
 		TmpReason:  s.tmpReason,
-		Jobs:       s.jobs,
+		FanOut:     s.fanOuts,
+		Jobs:       jobs,
 	}
 
-	for _, job := range s.jobs {
+	if len(rec.FanOut) == emptyLen {
+		rec.FanOut = nil
+	}
+
+	for _, job := range jobs {
 		if job.State != stateDone {
 			rec.Outcome = OutcomeParked
 		}
