@@ -203,6 +203,14 @@ func TestLoadRejectsInvalidKatas(t *testing.T) {
 
 	const head = "name: k\nparams:\n  p: {}\nagents:\n  a: {harness: claude, model: m}\n"
 
+	// fan spells a workflow whose head h fans out; tmpl is a plain template.
+	const tmpl = "  t: {outputs: [o]}\n"
+
+	fan := func(body string) string {
+		return "workflow:\n  h:\n    outputs: [o]\n    fan-out:\n      " +
+			body + "\n      max_rounds: 2\n      max_items: 2\n"
+	}
+
 	cases := map[string]struct {
 		body string
 		want error
@@ -244,6 +252,19 @@ func TestLoadRejectsInvalidKatas(t *testing.T) {
 		"adapter quote":       {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg@'1'\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
 		"adapter path":        {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: ../pkg}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
 		"amend bad adapter":   {head + "workflow:\n  j: {agent: {profile: a, acp_adapter: \"a b\"}, prompt: x, outputs: [o]}\n", ErrACPAdapter},
+		"bad job name":        {head + "workflow:\n  a/b: {outputs: [o]}\n", ErrJobName},
+		"fan-out items":       {head + fan("items: x\n      job: t") + tmpl, ErrFanItems},
+		"fan-out unknown job": {head + fan("items: o\n      job: nope") + tmpl, ErrFanJob},
+		"fan-out self":        {head + fan("items: o\n      job: h") + tmpl, ErrFanSelf},
+		"fan-out no rounds":   {head + "workflow:\n  h: {outputs: [o], fan-out: {items: o, job: t, max_items: 1}}\n" + tmpl, ErrFanRounds},
+		"fan-out no items":    {head + "workflow:\n  h: {outputs: [o], fan-out: {items: o, job: t, max_rounds: 1}}\n" + tmpl, ErrFanMaxItems},
+		"fan-out shared":      {head + fan("items: o\n      job: t") + "  g: {outputs: [o], fan-out: {items: o, job: t, max_rounds: 1, max_items: 1}}\n" + tmpl, ErrFanShared},
+		"template needs":      {head + fan("items: o\n      job: t") + "  t: {needs: [h], outputs: [o]}\n", ErrFanNeeds},
+		"template needed":     {head + fan("items: o\n      job: t") + tmpl + "  z: {needs: [t], outputs: [o]}\n", ErrFanNeeded},
+		"template fans out":   {head + fan("items: o\n      job: t") + "  t: {outputs: [o], fan-out: {items: o, job: u, max_rounds: 1, max_items: 1}}\n  u: {outputs: [o]}\n", ErrFanNested},
+		"fanout ref":          {head + "workflow:\n  i: {outputs: [o]}\n  j: {post-steps: [\"cat {{fanout:i}}\"]}\n", ErrFanOutRef},
+		"artifact of a head":  {head + fan("items: o\n      job: t") + tmpl + "  z: {post-steps: [\"cat {{artifact:h/o}}\"]}\n", ErrFanArtifact},
+		"item outside":        {head + "workflow:\n  j: {post-steps: [\"cat {{item}}\"]}\n", ErrItemRef},
 	}
 
 	for name, tc := range cases {
