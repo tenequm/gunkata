@@ -46,6 +46,7 @@ not json
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","used":100,"size":200000,"cost":{"amount":0.01,"currency":"USD"}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"answer.\n"},"messageId":"m2"}}}
 also not json
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_2","title":"deferred","kind":"read","status":"completed"}}}
 {"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":18,"outputTokens":719,"totalTokens":737}}}
 `
 

@@ -1233,10 +1233,14 @@ func (e *eventStream) update(u acpUpdate) {
 		t := e.track(u)
 		e.log.Info("tool start", keyTool, u.ID, keyTitle, t.title,
 			keyKind, t.kind)
-		e.maybeEnd(u, t)
+		_ = e.maybeEnd(u, t)
 	case updateToolUpdate:
-		e.message.Reset()
-		e.maybeEnd(u, e.track(u))
+		// A finished tool may be reported after the final message: agy
+		// batches its completions at the turn's end. Only an unfinished
+		// one means the text so far was a preamble.
+		if !e.maybeEnd(u, e.track(u)) {
+			e.message.Reset()
+		}
 	case updateUsage:
 		if u.Cost != nil {
 			e.cost = u.Cost
@@ -1275,16 +1279,20 @@ func (e *eventStream) track(u acpUpdate) *toolCall {
 	return t
 }
 
-func (e *eventStream) maybeEnd(u acpUpdate, t *toolCall) {
+// maybeEnd logs a tool that reached a terminal status, and reports whether
+// it did.
+func (e *eventStream) maybeEnd(u acpUpdate, t *toolCall) bool {
 	status := deref(u.Status)
 	if status != toolCompleted && status != toolFailed {
-		return
+		return false
 	}
 
 	delete(e.tools, u.ID)
 	e.log.Log(context.Background(), levelFor[status == toolCompleted],
 		"tool end", keyTool, u.ID, keyTitle, t.title, keyKind, t.kind,
 		"status", status, durSince(t.began))
+
+	return true
 }
 
 func (e *eventStream) turnEnd(r acpResult) {
