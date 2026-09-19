@@ -27,6 +27,11 @@ const DefaultTimeoutSeconds = 240
 // to. A job declares it to require a non-empty one.
 const MessageOutput = "message.md"
 
+// ParkedNote is the file the engine writes into a parked fan-out instance's
+// artifact directory, saying which item it was given and why it did not come
+// back. A template may not declare an output of that name.
+const ParkedNote = "parked.md"
+
 // The lint config forbids bare literals, so the ones this package repeats are
 // named here.
 const (
@@ -99,7 +104,9 @@ var (
 		"fanout placeholder names no fan-out head or template")
 	ErrFanArtifact = errors.New(
 		"a fan-out head or template has no single artifact directory")
-	ErrItemRef = errors.New("{{item}} is only for a fan-out template")
+	ErrItemRef     = errors.New("{{item}} is only for a fan-out template")
+	ErrParkedOwned = errors.New(
+		ParkedNote + " is the engine's; a template may not declare it")
 )
 
 // shellTokens are load errors in a step's string form, which is never a
@@ -507,6 +514,8 @@ func (k *Kata) validateTemplates() error {
 			return fmt.Errorf(jobErrFmt, job.Name, ErrFanNested)
 		case len(job.Needs) != emptyLen:
 			return fmt.Errorf(jobErrFmt, job.Name, ErrFanNeeds)
+		case slices.Contains(job.Outputs, ParkedNote):
+			return fmt.Errorf(jobErrFmt, job.Name, ErrParkedOwned)
 		}
 	}
 

@@ -83,12 +83,15 @@ type record struct {
 	Jobs   map[string]*jobRecord    `json:"jobs"`
 }
 
-// fanOutRecord is how one fan-out loop ended: the rounds it ran, the item
-// count of each, and whether max_rounds stopped it rather than an empty
-// round.
+// fanOutRecord is how one fan-out loop ended: the rounds it ran, the item and
+// parked counts of each, and whether max_rounds stopped it rather than an
+// empty round.
 type fanOutRecord struct {
 	Rounds int   `json:"rounds"`
 	Items  []int `json:"items"`
+	// Parked counts the instances of each round that did not come back. The
+	// round tolerated them; the run's outcome still records them.
+	Parked []int `json:"parked"`
 	Capped bool  `json:"capped"`
 }
 

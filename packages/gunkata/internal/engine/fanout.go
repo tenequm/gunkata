@@ -66,18 +66,21 @@ func (s *scheduler) rounds(
 			return failure
 		}
 
+		parked := s.runItems(ctx, head, round, items)
 		summary.Items = append(summary.Items, len(items))
+		summary.Parked = append(summary.Parked, parked)
 
-		log.Info("fan-out round", keyRound, round, keyItems, len(items))
+		log.Info("fan-out round", keyRound, round,
+			keyItems, len(items), keyParked, parked)
 
 		if len(items) == emptyLen {
 			return unset // a round that found nothing new ends the loop
 		}
 
-		// A cancelled run needs no check here: the next instance the loop
-		// starts refuses on the dead context and parks the head.
-		if failure := s.runItems(ctx, head, round, items); failure != unset {
-			return failure
+		// Instances no longer stop the loop, so the run's own cancellation
+		// has to: without this a cancelled run would spin out its rounds.
+		if ctx.Err() != nil {
+			return fmt.Sprintf("run interrupted: %v", ctx.Err())
 		}
 	}
 
@@ -122,11 +125,13 @@ func (s *scheduler) runHead(
 	return items, unset
 }
 
-// runItems runs the template once per item, in parallel, and returns the
-// first failure in item order: one parked instance parks the whole fan-out.
+// runItems runs the template once per item, in parallel, and returns how many
+// parked. A round is sampled work: a parked instance is one sample that did
+// not come back, recorded and left as file evidence, never a reason to end
+// the loop.
 func (s *scheduler) runItems(
 	ctx context.Context, head *kata.Job, round int, items []string,
-) string {
+) int {
 	tmpl := s.kata.Workflow[head.FanOut.Job]
 	failures := make([]string, len(items))
 
@@ -135,8 +140,7 @@ func (s *scheduler) runItems(
 	for i, item := range items {
 		wg.Go(func() {
 			inst := *tmpl
-			inst.Name = tmpl.Name + roundSeg + strconv.Itoa(round) +
-				itemSeg + strconv.Itoa(i+firstRound)
+			inst.Name = itemKey(tmpl.Name, round, i)
 			inst.Item = item
 
 			failures[i] = s.attemptInstance(ctx, &inst)
@@ -145,13 +149,49 @@ func (s *scheduler) runItems(
 
 	wg.Wait()
 
+	parked := emptyLen
+
 	for i, failure := range failures {
-		if failure != unset {
-			return fmt.Sprintf("item %d: %s", i+firstRound, failure)
+		if failure == unset {
+			continue
 		}
+
+		parked++
+
+		s.noteParked(itemKey(tmpl.Name, round, i), items[i], failure)
 	}
 
-	return unset
+	return parked
+}
+
+// itemKey names one template instance by its place in the loop.
+func itemKey(tmpl string, round, index int) string {
+	return tmpl + roundSeg + strconv.Itoa(round) +
+		itemSeg + strconv.Itoa(index+firstRound)
+}
+
+// noteParked leaves the next head file evidence that this sample did not come
+// back, beside whatever the instance did manage to write. Without it a head
+// reading the fan-out tree cannot tell a question that failed from one that
+// was never asked.
+func (s *scheduler) noteParked(name, item, failure string) {
+	dir := filepath.Join(s.layout.artifacts(), name)
+	path := filepath.Join(dir, kata.ParkedNote)
+
+	note := "This investigation did not complete. The engine parked it\n" +
+		"and the round carried on without its answer.\n\n" +
+		"item: " + item + "\n" +
+		"failure: " + failure + "\n\n" +
+		"Nothing here was answered. Treat the question as open -\n" +
+		"not settled, and not unasked.\n"
+
+	err := os.MkdirAll(dir, dirPerm)
+	if err == nil {
+		err = replaceFile(path, []byte(note))
+	}
+
+	s.log.Warn("fan-out item parked", keyJob, name, "item", item,
+		"failure", failure, "evidence", path, keyErr, err)
 }
 
 // attemptInstance runs one instance the engine derived and records it under

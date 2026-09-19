@@ -136,8 +136,21 @@ that holds when it never gives one. `max_items` bounds one round's width; a roun
 exceeds it parks the head rather than truncating silently. The head's record is the
 loop's verdict, so a dependent releases on the whole loop, never on one round.
 
-A round is not a retry. Each round is new work over new inputs, and a parked head or
-instance parks the loop where it stands.
+A round is not a retry. Each round is new work over new inputs.
+
+**A round is sampled work, so one instance parking does not end it.** The instances of a
+round are independent investigations, not links in a chain: an answer that never comes
+back is a missing sample, and the round carries on without it. The engine records the
+parked instance, writes `parked.md` into its artifact directory - the item it was given
+and why it did not come back - and runs the next round; the head still runs, and the
+head's dependents still release. `{{fanout:<template>}}` reaches that note like any other
+artifact, so a head cannot mistake a question that failed for one that was never asked. A
+template may not declare an output named `parked.md`; the engine owns it.
+
+Everything else still parks the run: a parked **head** instance, a parked declared job, a
+round over `max_items`, a failed pre-step. The run's own outcome still records the park -
+`succeeded` means every job did, instances included - so a run whose report was written
+over a missing sample says so.
 
 The template is scheduled only by its fan-out: it declares no `needs`, no job may need
 it, it may not fan out in turn, and only one fan-out may name it. Its context is
@@ -148,9 +161,9 @@ and post-step checks. Instances are named for their place in the loop, and the r
 follows: the head's round *r* is `<head>/round-<r>`, its *i*-th item
 `<template>/round-<r>/item-<i>`, with artifacts under `artifacts/` at the same path.
 `record.json` names every instance that ran, with the item each was given, and carries
-one `fan_out` entry per head: the rounds it ran, the item count of each, and whether
-`max_rounds` stopped it. `gunkata.log` adds `fan-out start`, `fan-out round` and `fan-out
-end`.
+one `fan_out` entry per head: the rounds it ran, the item and parked counts of each, and
+whether `max_rounds` stopped it. `gunkata.log` adds `fan-out start`, `fan-out round`,
+`fan-out item parked` and `fan-out end`.
 
 Because a head and a template have no single artifact directory, `{{artifact:<job>/...}}`
 of either is a load error; `{{fanout:<job>}}` names the whole tree instead.
@@ -235,11 +248,18 @@ Held here in quarantine until each proves its keep:
    the engine owns the full tree via process groups.
 
 Fan-out changes exactly one of the promises around them: the DAG is known at load time no
-longer. The rest hold unchanged - an instance completes only against its own verified
-evidence, its work item and its outputs are files in the run dir, it gets its own
-directories and HOME, a parked instance parks the loop and is never retried, and teardown
-still owns the whole tree. What fan-out costs is a load-time answer to "how much will
-this run do"; `max_rounds` and `max_items` are what replaces it.
+longer. The rest hold unchanged - an instance's work item and its outputs are files in the
+run dir, it gets its own directories and HOME, nothing is ever retried, and teardown still
+owns the whole tree. What fan-out costs is a load-time answer to "how much will this run
+do"; `max_rounds` and `max_items` are what replaces it.
+
+**Verified completion is untouched by the tolerated park**, and the distinction is worth
+stating precisely. Every instance is still held to its own declared outputs and
+post-steps: a parked instance parked *because* its evidence did not pass, and it is
+recorded parked. What tolerates a missing answer is the **round**, not the job - no job
+ever skips its own gate, and no dependent releases on a job that failed one. A round asks
+several independent questions at once and reports how many came back, which is a
+different thing from a job claiming it is done.
 
 ## Deliberately absent
 

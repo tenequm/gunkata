@@ -33,16 +33,17 @@ const (
 
 // Log attribute keys, shared so every event reads the same way.
 const (
-	keyJob   = "job"
-	keyErr   = "err"
-	keyDur   = "dur_ms"
-	keyExit  = "exit"
-	keyState = "state"
-	keyTitle = "title"
-	keyKind  = "kind"
-	keyTool  = "tool"
-	keyRound = "round"
-	keyItems = "items"
+	keyJob    = "job"
+	keyErr    = "err"
+	keyDur    = "dur_ms"
+	keyExit   = "exit"
+	keyState  = "state"
+	keyTitle  = "title"
+	keyKind   = "kind"
+	keyTool   = "tool"
+	keyRound  = "round"
+	keyItems  = "items"
+	keyParked = "parked"
 )
 
 // firstRound is the number the engine gives a fan-out's first round; rounds

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -236,9 +237,13 @@ func TestFanOutParksOverMaxItems(t *testing.T) {
 	}
 }
 
-// itemFailureKata has a template that writes nothing, so its instance parks.
-const itemFailureKata = `
+// parkedItemKata has a template that writes nothing, so every instance parks.
+// Its head emits two items in round 1 and one in round 2, so the loop has to
+// survive both to reach the empty round 3.
+const parkedItemKata = `
 name: stub-fanout-parked-item
+params:
+  count: {}
 agents:
   stub:
     harness: claude
@@ -248,15 +253,15 @@ workflow:
   escalate:
     agent: stub
     prompt: |
-      ACTION=items
-      COUNT=1
+      ACTION=rounds
+      COUNT={{param:count}}
       TARGET={{output:items}}
     outputs: [items]
     fan-out:
       items: items
       job: probe
-      max_rounds: 2
-      max_items: 2
+      max_rounds: 4
+      max_items: 4
   probe:
     agent: stub
     prompt: |
@@ -269,29 +274,155 @@ workflow:
       - [test, -d, "{{fanout:escalate}}"]
 `
 
-func TestFanOutParksWhenAnItemParks(t *testing.T) {
+// A parked instance is a sample that did not come back, not a dependency
+// failure: the round carries on, the loop reaches its own end, and the head's
+// dependents release.
+func TestFanOutCarriesOnPastAParkedItem(t *testing.T) {
 	stubACPX(t)
 
-	res := mustRun(t, itemFailureKata, nil)
+	res := mustRun(t, parkedItemKata, map[string]string{"count": "2"})
+
+	// The run still records the park; what changed is that it no longer ends
+	// the loop.
 	if res.Outcome != OutcomeParked {
 		t.Fatalf(outcomeFmt, res.Outcome, OutcomeParked)
 	}
 
 	rec := readRecord(t, res.RunDir)
 
-	if state := rec.Jobs["probe/round-1/item-1"].State; state != stateParked {
-		t.Errorf("item = %q, want %q", state, stateParked)
+	loop := rec.FanOut["escalate"]
+	if loop.Rounds != 3 || loop.Capped ||
+		!slices.Equal(loop.Items, []int{2, 1, 0}) ||
+		!slices.Equal(loop.Parked, []int{2, 1, 0}) {
+		t.Errorf("fan-out = %+v, want 3 rounds, items [2 1 0], parked [2 1 0]", loop)
 	}
 
-	if failure := rec.Jobs["escalate"].Failure; !strings.Contains(failure, "item 1") {
-		t.Errorf("escalate failure = %q, want it to name the item", failure)
+	// The head reached its own terminating answer and released its dependents.
+	if state := rec.Jobs["escalate"].State; state != stateDone {
+		t.Errorf("escalate = %q, want %q: a missing sample is not a failed need",
+			state, stateDone)
+	}
+
+	if failure := rec.Jobs["escalate"].Failure; failure != "" {
+		t.Errorf("escalate failure = %q, want none", failure)
+	}
+
+	if state := rec.Jobs["collect"].State; state != stateDone {
+		t.Errorf("collect = %q, want %q", state, stateDone)
+	}
+
+	// Each instance is still held to its own evidence and recorded parked.
+	for _, name := range []string{
+		"probe/round-1/item-1", "probe/round-1/item-2", "probe/round-2/item-1",
+	} {
+		if state := rec.Jobs[name].State; state != stateParked {
+			t.Errorf("%s = %q, want %q", name, state, stateParked)
+		}
+	}
+}
+
+// The note is what stops the next head reading silence as "never asked".
+func TestFanOutWritesEvidenceForAParkedItem(t *testing.T) {
+	stubACPX(t)
+
+	res := mustRun(t, parkedItemKata, map[string]string{"count": "2"})
+
+	note := artifact(t, res.RunDir, "probe/round-1/item-2", "parked.md")
+	for _, want := range []string{
+		"did not complete", "item-2.md", "out.txt is missing or empty", "open",
+	} {
+		if !strings.Contains(note, want) {
+			t.Errorf("parked.md = %q, want it to mention %q", note, want)
+		}
+	}
+
+	// It is reachable exactly where a head looks: under {{fanout:probe}}.
+	path := filepath.Join(res.RunDir, artifactsDir, "probe", "round-1", "item-2", "parked.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("parked note not under the fan-out tree: %v", err)
+	}
+}
+
+// A round in which every sample fails is still a round: the loop does not
+// mistake a total miss for a reason to stop.
+func TestFanOutCarriesOnWhenEveryItemParks(t *testing.T) {
+	stubACPX(t)
+
+	res := mustRun(t, parkedItemKata, map[string]string{"count": "4"})
+	rec := readRecord(t, res.RunDir)
+
+	loop := rec.FanOut["escalate"]
+	if !slices.Equal(loop.Items, loop.Parked) {
+		t.Errorf("fan-out = %+v, want every item of every round parked", loop)
+	}
+
+	if loop.Rounds != 3 || !slices.Equal(loop.Items, []int{4, 1, 0}) {
+		t.Errorf("fan-out = %+v, want 3 rounds of [4 1 0]", loop)
+	}
+
+	if state := rec.Jobs["escalate/round-2"].State; state != stateDone {
+		t.Errorf("round 2 head = %q, want %q: round 1 lost every sample and the "+
+			"head still ran", state, stateDone)
+	}
+
+	if state := rec.Jobs["collect"].State; state != stateDone {
+		t.Errorf("collect = %q, want %q", state, stateDone)
+	}
+}
+
+// What still parks the run: a head that fails its own evidence.
+const parkedHeadKata = `
+name: stub-fanout-parked-head
+agents:
+  stub:
+    harness: claude
+    model: stub-model
+    timeout_seconds: 7
+workflow:
+  escalate:
+    agent: stub
+    prompt: |
+      ACTION=none
+      TARGET={{output:ledger.md}}
+    outputs: [items, ledger.md]
+    fan-out:
+      items: items
+      job: probe
+      max_rounds: 2
+      max_items: 2
+  probe:
+    agent: stub
+    prompt: |
+      ACTION=derive
+      SOURCE={{item}}
+      TARGET={{output:out.txt}}
+    outputs: [out.txt]
+  collect:
+    needs: [escalate]
+    post-steps:
+      - [test, -d, "{{fanout:escalate}}"]
+`
+
+func TestFanOutParksOnAParkedHead(t *testing.T) {
+	stubACPX(t)
+
+	res := mustRun(t, parkedHeadKata, nil)
+	if res.Outcome != OutcomeParked {
+		t.Fatalf(outcomeFmt, res.Outcome, OutcomeParked)
+	}
+
+	rec := readRecord(t, res.RunDir)
+
+	if failure := rec.Jobs["escalate"].Failure; !strings.Contains(failure, "ledger.md") {
+		t.Errorf("escalate failure = %q, want the head's own missing output", failure)
 	}
 
 	if _, ok := rec.Jobs["escalate/round-2"]; ok {
-		t.Error("the loop ran another round after an item parked")
+		t.Error("the loop ran on past a parked head")
 	}
 
 	if state := rec.Jobs["collect"].State; state != statePending {
-		t.Errorf("collect = %q, want %q", state, statePending)
+		t.Errorf("collect = %q, want %q: a parked head still holds its dependents",
+			state, statePending)
 	}
 }

@@ -94,6 +94,16 @@ case "$action" in
       done
     fi
     ;;
+  rounds) # a fan-out head that emits COUNT items in round 1 and one in round 2,
+          # then none: the loop has to reach round 3 for this to end
+    mkdir -p "$target"
+    case "$(basename "$(dirname "$HOME")")" in
+      round-1) n="$(field COUNT)" ;;
+      round-2) n=1 ;;
+      *)       n=0 ;;
+    esac
+    for i in $(seq 1 "$n"); do printf 'work %s\n' "$i" > "$target/item-$i.md"; done
+    ;;
   loop)   # a fan-out head that never runs dry, so max_rounds has to stop it
     mkdir -p "$target"
     printf 'again\n' > "$target/item-1.md"
