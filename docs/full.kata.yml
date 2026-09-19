@@ -11,6 +11,8 @@ agents:
   executor:
     harness: claude               # the acpx family that runs the job (claude, agy, ...)
     model: claude-opus-5
+    acp_adapter: "@agentclientprotocol/claude-agent-acp@0.79.0"   # optional: pins the ACP
+                                  # adapter package acpx runs via npx; absent = acpx's own
     timeout_seconds: 3600
     options:                      # harness-specific settings, passed through the adapter
       reasoning_effort: high

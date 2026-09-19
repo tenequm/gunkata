@@ -124,8 +124,15 @@ var harnessAuth = map[string][]string{
 // agent for; any other harness is acpx's positional agent name. acpx 0.17
 // lacks Antigravity, so agy runs the host's wrapper around its ACP server.
 var harnessAgent = map[string][]string{
-	harnessAgy: {"--agent", "agy-acp-server"},
+	harnessAgy: {agentFlag, "agy-acp-server"},
 }
+
+// agentFlag names acpx's custom agent command; npxRun is how that command
+// runs a pinned adapter package, from the executor's shared npm cache.
+const (
+	agentFlag = "--agent"
+	npxRun    = "npx -y "
+)
 
 // harnessEnv is what a harness needs set to start bare. Claude Code would
 // otherwise load the claude.ai connectors tied to the subscription login,
@@ -182,6 +189,7 @@ var githubAuth = []string{".config/gh", ".config/git", ".onecli"}
 // execSpec is one acpx invocation.
 type execSpec struct {
 	harness string
+	adapter string // npm package spec; unset keeps acpx's built-in
 	model   string
 	prompt  string
 	options map[string]string
@@ -493,13 +501,8 @@ func acpxArgs(spec execSpec, mcpFlags []string) []string {
 		"--format", "json", "--json-strict",
 	}
 
-	agent, ok := harnessAgent[spec.harness]
-	if !ok {
-		agent = []string{spec.harness}
-	}
-
 	args = append(args, mcpFlags...)
-	args = append(args, agent...)
+	args = append(args, acpxAgent(spec)...)
 	args = append(args, "exec")
 
 	for _, key := range slices.Sorted(maps.Keys(spec.options)) {
@@ -508,6 +511,20 @@ func acpxArgs(spec execSpec, mcpFlags []string) []string {
 	}
 
 	return append(args, spec.prompt)
+}
+
+// acpxAgent is the acpx agent argument: a pinned adapter run through npx,
+// the harness's own agent command, or acpx's built-in agent by name.
+func acpxAgent(spec execSpec) []string {
+	if spec.adapter != unset {
+		return []string{agentFlag, npxRun + spec.adapter}
+	}
+
+	if agent, ok := harnessAgent[spec.harness]; ok {
+		return agent
+	}
+
+	return []string{spec.harness}
 }
 
 // mcpServer is one entry of acpx's mcpServers array.

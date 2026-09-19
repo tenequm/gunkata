@@ -822,6 +822,53 @@ workflow:
 	}
 }
 
+// TestRunPinsTheACPAdapter holds a pinned adapter to acpx's agent command,
+// run through npx in place of the built-in agent, for claude and codex
+// alike, with a job's amendment winning over its profile.
+func TestRunPinsTheACPAdapter(t *testing.T) {
+	stubACPX(t)
+	t.Setenv("HOME", t.TempDir())
+
+	const claudeACP = "@agentclientprotocol/claude-agent-acp"
+
+	res := mustRun(t, `
+name: stub-adapter
+agents:
+  claude: {harness: claude, model: m, acp_adapter: "`+claudeACP+`@0.79.0"}
+  codex: {harness: codex, model: m, acp_adapter: "@agentclientprotocol/codex-acp@^1.2.0"}
+workflow:
+  pinned: {agent: claude, prompt: "ACTION=write\nTARGET={{output:o}}", outputs: [o]}
+  amended:
+    agent: {profile: claude, acp_adapter: "`+claudeACP+`@0.80.1"}
+    prompt: "ACTION=write\nTARGET={{output:o}}"
+    outputs: [o]
+  codex: {agent: codex, prompt: "ACTION=write\nTARGET={{output:o}}", outputs: [o]}
+`, nil)
+	if res.Outcome != OutcomeSucceeded {
+		t.Fatalf("Run() = %+v", res)
+	}
+
+	want := map[string]string{
+		"pinned":  claudeACP + "@0.79.0",
+		"amended": claudeACP + "@0.80.1",
+		"codex":   "@agentclientprotocol/codex-acp@^1.2.0",
+	}
+
+	for job, adapter := range want {
+		home := filepath.Join(res.RunDir, jobsDir, job, homeDir)
+
+		argv := readFile(t, filepath.Join(home, "argv.txt"))
+		if agent := "--json-strict\n--agent\nnpx -y " + adapter + "\nexec\n"; !strings.Contains(argv, agent) {
+			t.Errorf("%s acpx argv = %q, want %q after the global flags", job, argv, agent)
+		}
+	}
+
+	claudeEnv := readFile(t, filepath.Join(res.RunDir, jobsDir, "pinned", homeDir, "env.txt"))
+	if !strings.Contains(claudeEnv, "ACPX_CLAUDE_INCLUDE_USER_SETTINGS=1\n") {
+		t.Error("a pinned claude adapter lost the harness's own environment")
+	}
+}
+
 func TestRunTimeoutKillsTheProcessGroup(t *testing.T) {
 	stubACPX(t)
 
@@ -950,6 +997,7 @@ func TestRunRejectsBeforeRunning(t *testing.T) {
 		"undeclared param": {"name: k\nworkflow:\n  j: {outputs: [o]}\n", map[string]string{"q": "1"}, errUnknownParam},
 		"unset MCP var":    {"name: k\nagents:\n  a: {harness: claude, model: m, mcps: [{url: \"https://x/${" + mcpVarName + "}\", required: true}]}\n" + job, nil, errMCPVar},
 		"skills on pi":     {"name: k\nagents:\n  a: {harness: pi, model: m, skills: [./s]}\n" + job, nil, errSkillDirs},
+		"adapter on agy":   {"name: k\nagents:\n  a: {harness: agy, model: m, acp_adapter: pkg@1}\n" + job, nil, errAdapterHarness},
 		"bad skill URL":    {"name: k\nagents:\n  a: {harness: claude, model: m, skills: [\"https://github.com/o/r\"]}\n" + job, nil, errSkillURL},
 	}
 

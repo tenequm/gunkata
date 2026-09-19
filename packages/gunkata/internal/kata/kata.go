@@ -70,6 +70,7 @@ var (
 	ErrAmendHarness = errors.New("harness may not be amended")
 	ErrMCPField     = errors.New("MCP entry names an unknown field")
 	ErrMCPURL       = errors.New("MCP entry declares no url")
+	ErrACPAdapter   = errors.New("acp_adapter must be one npm package spec")
 )
 
 // shellTokens are load errors in a step's string form, which is never a
@@ -78,6 +79,11 @@ var shellTokens = []string{"|", ">", "<", "&&", ";", "$", "`"}
 
 // paramName keeps a param key safe as a run-dir path element.
 var paramName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// acpAdapter is one npm package spec, optionally versioned: nothing that
+// would split into two arguments or read as npx flags.
+var acpAdapter = regexp.MustCompile(
+	`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*(@[A-Za-z0-9._^~<>=|*-]+)?$`)
 
 // placeholder matches any {{kind:ref}}; the kind is checked at load.
 var placeholder = regexp.MustCompile(`\{\{([a-z]+):([^}]*)\}\}`)
@@ -106,6 +112,9 @@ type Profile struct {
 	Options        map[string]string `yaml:"options"`
 	Skills         []string          `yaml:"skills"`
 	MCPs           []mcpEntry        `yaml:"mcps"`
+	// ACPAdapter pins the npm package acpx runs as the harness's adapter;
+	// unset keeps acpx's built-in one.
+	ACPAdapter string `yaml:"acp_adapter"`
 }
 
 // mcpEntry is one MCP server. An optional server whose URL references an
@@ -142,6 +151,7 @@ type Step []string
 // amendFields are the keys an agent amendment may carry.
 var amendFields = []string{
 	keyProfile, "model", "timeout_seconds", "options", "skills", "mcps",
+	"acp_adapter",
 }
 
 // UnmarshalYAML takes a profile name or an amendment object.
@@ -390,6 +400,14 @@ func validateProfile(p Profile) error {
 		return ErrTimeout
 	}
 
+	return validateAdapter(p.ACPAdapter)
+}
+
+func validateAdapter(adapter string) error {
+	if adapter != unset && !acpAdapter.MatchString(adapter) {
+		return fmt.Errorf(quotedFmt, ErrACPAdapter, adapter)
+	}
+
 	return nil
 }
 
@@ -459,6 +477,10 @@ func (k *Kata) resolveExecutor(job *Job) error {
 		return ErrTimeout
 	}
 
+	if err := validateAdapter(job.Agent.Amend.ACPAdapter); err != nil {
+		return err
+	}
+
 	merged := merge(base, job.Agent.Amend)
 	job.Executor = &merged
 
@@ -473,9 +495,10 @@ func merge(base, amend Profile) Profile {
 		Model:   cmp.Or(amend.Model, base.Model),
 		TimeoutSeconds: cmp.Or(amend.TimeoutSeconds, base.TimeoutSeconds,
 			DefaultTimeoutSeconds),
-		Options: map[string]string{},
-		Skills:  slices.Concat(base.Skills, amend.Skills),
-		MCPs:    slices.Concat(base.MCPs, amend.MCPs),
+		Options:    map[string]string{},
+		Skills:     slices.Concat(base.Skills, amend.Skills),
+		MCPs:       slices.Concat(base.MCPs, amend.MCPs),
+		ACPAdapter: cmp.Or(amend.ACPAdapter, base.ACPAdapter),
 	}
 
 	maps.Copy(merged.Options, base.Options)

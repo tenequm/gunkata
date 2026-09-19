@@ -17,6 +17,7 @@ agents:                        # a profile fully describes one executor shape
   <profile>:
     harness: <id>              # required
     model: <id>                # required
+    acp_adapter: <npm spec>    # optional: pins the harness's ACP adapter package
     timeout_seconds: <int>     # optional
     options: {}                # optional harness-specific settings
     skills: []                 # skill dirs: local path or GitHub tree URL
@@ -46,6 +47,16 @@ HOME, nothing inherited but subscription auth - and every addition is declared.
   Antigravity, which acpx 0.17 lacks: it runs the host's `agy-acp-server` on PATH.
   `codex` starts in its adapter's full-access mode, as other harnesses run unsandboxed;
   `options: {mode: <mode>}` picks another.
+- `acp_adapter:` - pins the ACP adapter package acpx runs for the harness, as one npm
+  package spec, e.g. `@agentclientprotocol/claude-agent-acp@0.79.0`. Absent, acpx runs
+  its built-in adapter for the harness at the version range it pins. Set, the engine
+  hands acpx `--agent "npx -y <spec>"` in place of the harness name; the harness's own
+  bare setup, credentials and skills location still apply, and npx fetches through the
+  engine's shared npm cache. The value is a package name with an optional `@<version>`
+  (a version, tag or semver range) - no whitespace, quotes, paths or shell syntax - or
+  it is a load error. Only harnesses acpx has a built-in adapter for take one (`claude`,
+  `codex`); on a harness that runs its own agent command, such as `agy`, the engine
+  refuses the run before it starts.
 - `skills:` - each entry is a skill directory: a local path, or a GitHub tree URL
   (`https://github.com/<o>/<r>/tree/<ref>/<path>`). The engine fetches it engine-side with
   ambient credentials, resolves the ref to a SHA at run start, snapshots it into the run
@@ -60,9 +71,9 @@ HOME, nothing inherited but subscription auth - and every addition is declared.
 - `options:` - harness-specific key=value settings, passed through the adapter.
 
 `agent:` on a job takes the profile name, or an object amending it: `profile:` names the
-base; scalar fields (`model`, `timeout_seconds`) replace, list fields (`skills`, `mcps`)
-append, `options` keys win. `harness` may not be amended - a different harness is a
-different profile. The merge happens once at load, resolved onto the job.
+base; scalar fields (`model`, `timeout_seconds`, `acp_adapter`) replace, list fields
+(`skills`, `mcps`) append, `options` keys win. `harness` may not be amended - a different
+harness is a different profile. The merge happens once at load, resolved onto the job.
 
 ## Jobs
 

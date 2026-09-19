@@ -85,7 +85,7 @@ func checkSkills(k *kata.Kata) error {
 		}
 
 		if err := checkJobSkills(job.Executor); err != nil {
-			return fmt.Errorf("job %q: %w", job.Name, err)
+			return fmt.Errorf(jobFmt, job.Name, err)
 		}
 	}
 

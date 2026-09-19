@@ -77,6 +77,41 @@ func TestLoadMergesAmendments(t *testing.T) {
 	if len(work.Skills) != 2 {
 		t.Errorf("work skills = %v, amending check leaked into the base profile", work.Skills)
 	}
+
+	if want := k.Agents["executor"].ACPAdapter; want == "" || work.ACPAdapter != want || check.ACPAdapter != want {
+		t.Errorf("acp_adapter = %q, %q; want the profile's %q", work.ACPAdapter, check.ACPAdapter, want)
+	}
+}
+
+// TestLoadAmendsTheACPAdapter holds acp_adapter to the scalar rule: an
+// amendment replaces it, and a profile without one leaves it unset.
+func TestLoadAmendsTheACPAdapter(t *testing.T) {
+	t.Parallel()
+
+	k, err := Load(writeKata(t, `
+name: k
+agents:
+  a: {harness: claude, model: m, acp_adapter: "@agentclientprotocol/claude-agent-acp@0.79.0"}
+  b: {harness: codex, model: m}
+workflow:
+  pinned: {agent: a, prompt: go, outputs: [o]}
+  amended: {agent: {profile: a, acp_adapter: "@agentclientprotocol/claude-agent-acp@^0.80.0"}, prompt: go, outputs: [o]}
+  builtin: {agent: b, prompt: go, outputs: [o]}
+`))
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	want := map[string]string{
+		"pinned":  "@agentclientprotocol/claude-agent-acp@0.79.0",
+		"amended": "@agentclientprotocol/claude-agent-acp@^0.80.0",
+		"builtin": "",
+	}
+	for job, adapter := range want {
+		if got := k.Workflow[job].Executor.ACPAdapter; got != adapter {
+			t.Errorf("%s acp_adapter = %q, want %q", job, got, adapter)
+		}
+	}
 }
 
 func TestLoadParsesBothMCPForms(t *testing.T) {
@@ -164,6 +199,12 @@ func TestLoadRejectsInvalidKatas(t *testing.T) {
 		"MCP unknown key":    {"name: k\nagents:\n  a: {harness: c, model: m, mcps: [{url: u, optional: true}]}\nworkflow:\n  j: {outputs: [o]}\n", ErrMCPField},
 		"MCP no url":         {"name: k\nagents:\n  a: {harness: c, model: m, mcps: [{required: true}]}\nworkflow:\n  j: {outputs: [o]}\n", ErrMCPURL},
 		"open quote":         {head + "workflow:\n  j: {post-steps: [\"echo 'a\"]}\n", ErrStep},
+		"adapter two words":  {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg --flag\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"adapter npx flag":   {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"-y\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"adapter shell":      {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg@1;rm\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"adapter quote":      {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg@'1'\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"adapter path":       {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: ../pkg}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"amend bad adapter":  {head + "workflow:\n  j: {agent: {profile: a, acp_adapter: \"a b\"}, prompt: x, outputs: [o]}\n", ErrACPAdapter},
 	}
 
 	for name, tc := range cases {

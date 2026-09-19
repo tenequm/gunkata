@@ -27,6 +27,7 @@ const (
 	argvHead = 0 // the command in a step's argv
 	argvTail = 1 // its arguments
 	stepNum  = 1 // steps are numbered from one in failures
+	jobFmt   = "job %q: %w"
 )
 
 // Log attribute keys, shared so every event reads the same way.
@@ -42,8 +43,10 @@ const (
 )
 
 var (
-	errUnknownParam = errors.New("no such param is declared by the kata")
-	errUnboundParam = errors.New("required param is not bound")
+	errUnknownParam   = errors.New("no such param is declared by the kata")
+	errUnboundParam   = errors.New("required param is not bound")
+	errAdapterHarness = errors.New(
+		"acp_adapter is for acpx built-in agents; this harness runs its own")
 )
 
 // levelFor maps whether a thing passed to its log level: what did not pass is
@@ -203,7 +206,7 @@ func bindParams(k *kata.Kata, given map[string]string) (
 }
 
 // preflight rejects what would fail mid-run: skills a harness cannot load,
-// variables a required MCP server lacks.
+// variables a required MCP server lacks, an adapter a harness cannot take.
 func preflight(k *kata.Kata) error {
 	if err := checkSkills(k); err != nil {
 		return err
@@ -211,7 +214,11 @@ func preflight(k *kata.Kata) error {
 
 	for _, job := range k.Jobs() {
 		if err := checkMCPs(job); err != nil {
-			return fmt.Errorf("job %q: %w", job.Name, err)
+			return fmt.Errorf(jobFmt, job.Name, err)
+		}
+
+		if err := checkAdapter(job); err != nil {
+			return fmt.Errorf(jobFmt, job.Name, err)
 		}
 	}
 
@@ -255,6 +262,20 @@ func (s *scheduler) choosePrivateTmp() {
 		s.tmpReason = err.Error()
 		s.log.Warn("executors share the host /tmp", keyErr, err)
 	}
+}
+
+// checkAdapter refuses an ACP adapter on a harness that runs its own agent
+// command instead of an acpx built-in.
+func checkAdapter(job *kata.Job) error {
+	if job.Executor == nil || job.Executor.ACPAdapter == unset {
+		return nil
+	}
+
+	if _, custom := harnessAgent[job.Executor.Harness]; custom {
+		return fmt.Errorf(quotedFmt, errAdapterHarness, job.Executor.Harness)
+	}
+
+	return nil
 }
 
 // checkMCPs refuses a required MCP server whose URL references an unset
@@ -510,6 +531,7 @@ func (s *scheduler) runPrompt(
 
 	code, versions, err := runExecutor(ctx, execSpec{
 		harness: p.Harness,
+		adapter: p.ACPAdapter,
 		model:   p.Model,
 		prompt:  kata.Expand(job, job.Prompt, s.params, s.layout.artifacts()),
 		options: p.Options,
