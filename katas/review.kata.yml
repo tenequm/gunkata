@@ -34,5 +34,9 @@ workflow:
       Check the PR against the current base branch too: how far behind it is, whether
       it conflicts, and whether the base has since changed the code the PR touches.
       Keep every checkout and scratch file in your working directory, never in /tmp.
+      Polish's parallel review phase is mandatory: launch all four of its review
+      agents with the Agent tool in one message, however small the diff. Reviewing
+      the diff yourself instead is a failed run. Name each agent you launched, with
+      its finding count, in the report.
       Write the full review report to {{output:report.md}}.
     outputs: [report.md]
