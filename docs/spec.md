@@ -18,6 +18,8 @@ agents:                        # a profile fully describes one executor shape
     harness: <id>              # required
     model: <id>                # required
     acp_adapter: <npm spec>    # optional: pins the harness's ACP adapter package
+    append_system_prompt: |    # optional: text appended to the agent's system prompt
+      ...
     timeout_seconds: <int>     # optional
     options: {}                # optional harness-specific settings
     skills: []                 # skill dirs: local path or GitHub tree URL
@@ -58,6 +60,11 @@ HOME, nothing inherited but subscription auth - and every addition is declared.
   it is a load error. Only harnesses acpx has a built-in adapter for take one (`claude`,
   `codex`); on a harness that runs its own agent command, such as `agy`, the engine
   refuses the run before it starts.
+- `append_system_prompt:` - text appended to the agent's own system prompt, inline in
+  the file. Placeholders expand in it as in `prompt`. acpx hands it to the adapter as
+  claude-agent-acp's ACP `_meta.systemPrompt.append`, which only the `claude` harness
+  honours - with or without a pinned `acp_adapter`; on any other harness the engine
+  refuses the run before it starts.
 - `skills:` - each entry is a skill directory: a local path, or a GitHub tree URL
   (`https://github.com/<o>/<r>/tree/<ref>/<path>`). The engine fetches it engine-side with
   ambient credentials, resolves the ref to a SHA at run start, snapshots it into the run
@@ -73,8 +80,10 @@ HOME, nothing inherited but subscription auth - and every addition is declared.
 
 `agent:` on a job takes the profile name, or an object amending it: `profile:` names the
 base; scalar fields (`model`, `timeout_seconds`, `acp_adapter`) replace, list fields
-(`skills`, `mcps`) append, `options` keys win. `harness` may not be amended - a different
-harness is a different profile. The merge happens once at load, resolved onto the job.
+(`skills`, `mcps`) append, `options` keys win. `append_system_prompt` appends too: the
+job's text follows the profile's, after a blank line. `harness` may not be amended - a
+different harness is a different profile. The merge happens once at load, resolved onto
+the job.
 
 ## Jobs
 
@@ -148,7 +157,8 @@ lines; the same events go to stderr as text), and per job under `jobs/<job>/`:
 `steps.log` (pre- and post-step output). A job's working directory is `home/work`, inside
 its executor's HOME: Claude Code searches the cwd's ancestors for skills up to HOME, so a
 work dir outside it would reach the operator's real home. The log names MCP servers and measures the
-prompt; it never holds expanded MCP URLs, environment values or the prompt text.
+prompt and the appended system prompt; it never holds expanded MCP URLs, environment
+values or the text of either.
 
 An executor sees its `home/tmp` as `/tmp`, so scratch an agent writes to a literal `/tmp`
 path stays in the run dir. This is best effort: it needs Linux with unprivileged user

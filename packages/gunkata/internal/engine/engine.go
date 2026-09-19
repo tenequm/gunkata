@@ -47,6 +47,8 @@ var (
 	errUnboundParam   = errors.New("required param is not bound")
 	errAdapterHarness = errors.New(
 		"acp_adapter is for acpx built-in agents; this harness runs its own")
+	errSystemPromptHarness = errors.New(
+		"append_system_prompt reaches only the claude harness")
 )
 
 // levelFor maps whether a thing passed to its log level: what did not pass is
@@ -205,20 +207,24 @@ func bindParams(k *kata.Kata, given map[string]string) (
 	return bound, nil
 }
 
+// jobChecks are preflight's per-job refusals.
+var jobChecks = []func(*kata.Job) error{
+	checkMCPs, checkAdapter, checkSystemPrompt,
+}
+
 // preflight rejects what would fail mid-run: skills a harness cannot load,
-// variables a required MCP server lacks, an adapter a harness cannot take.
+// variables a required MCP server lacks, an adapter or a system prompt a
+// harness cannot take.
 func preflight(k *kata.Kata) error {
 	if err := checkSkills(k); err != nil {
 		return err
 	}
 
 	for _, job := range k.Jobs() {
-		if err := checkMCPs(job); err != nil {
-			return fmt.Errorf(jobFmt, job.Name, err)
-		}
-
-		if err := checkAdapter(job); err != nil {
-			return fmt.Errorf(jobFmt, job.Name, err)
+		for _, check := range jobChecks {
+			if err := check(job); err != nil {
+				return fmt.Errorf(jobFmt, job.Name, err)
+			}
 		}
 	}
 
@@ -276,6 +282,17 @@ func checkAdapter(job *kata.Job) error {
 	}
 
 	return nil
+}
+
+// checkSystemPrompt refuses appended system prompt text on a harness whose
+// adapter ignores it: acpx hands it over as claude-agent-acp's ACP _meta.
+func checkSystemPrompt(job *kata.Job) error {
+	p := job.Executor
+	if p == nil || p.AppendSystemPrompt == unset || p.Harness == harnessClaude {
+		return nil
+	}
+
+	return fmt.Errorf(quotedFmt, errSystemPromptHarness, p.Harness)
 }
 
 // checkMCPs refuses a required MCP server whose URL references an unset
@@ -530,17 +547,18 @@ func (s *scheduler) runPrompt(
 	}
 
 	code, versions, err := runExecutor(ctx, execSpec{
-		harness: p.Harness,
-		adapter: p.ACPAdapter,
-		model:   p.Model,
-		prompt:  kata.Expand(job, job.Prompt, s.params, s.layout.artifacts()),
-		options: p.Options,
-		skills:  skills,
-		mcps:    usableMCPs(job, rec, log),
-		timeout: time.Duration(p.TimeoutSeconds) * time.Second,
-		home:    s.layout.home(job.Name),
-		work:    s.layout.work(job.Name),
-		jobDir:  s.layout.jobDir(job.Name),
+		harness:            p.Harness,
+		adapter:            p.ACPAdapter,
+		model:              p.Model,
+		prompt:             s.expand(job, job.Prompt),
+		appendSystemPrompt: s.expand(job, p.AppendSystemPrompt),
+		options:            p.Options,
+		skills:             skills,
+		mcps:               usableMCPs(job, rec, log),
+		timeout:            time.Duration(p.TimeoutSeconds) * time.Second,
+		home:               s.layout.home(job.Name),
+		work:               s.layout.work(job.Name),
+		jobDir:             s.layout.jobDir(job.Name),
 		message: filepath.Join(s.layout.artifacts(), job.Name,
 			kata.MessageOutput),
 		// set only for a run with an executor job, which this is
@@ -559,6 +577,11 @@ func (s *scheduler) runPrompt(
 	}
 
 	return unset
+}
+
+// expand resolves the placeholders in a text of the job's.
+func (s *scheduler) expand(job *kata.Job, text string) string {
+	return kata.Expand(job, text, s.params, s.layout.artifacts())
 }
 
 // usableMCPs is the job's MCP URLs minus the optional servers whose

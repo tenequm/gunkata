@@ -114,6 +114,43 @@ workflow:
 	}
 }
 
+// TestLoadAppendsTheSystemPrompt holds append_system_prompt to the list rule:
+// a job's amendment appends to its profile's text as a paragraph of its own.
+func TestLoadAppendsTheSystemPrompt(t *testing.T) {
+	t.Parallel()
+
+	k, err := Load(writeKata(t, `
+name: k
+agents:
+  a:
+    harness: claude
+    model: m
+    append_system_prompt: |
+      Be terse.
+  b: {harness: claude, model: m}
+workflow:
+  profile: {agent: a, prompt: go, outputs: [o]}
+  amended: {agent: {profile: a, append_system_prompt: Cite sources.}, prompt: go, outputs: [o]}
+  only: {agent: {profile: b, append_system_prompt: Cite sources.}, prompt: go, outputs: [o]}
+  unset: {agent: b, prompt: go, outputs: [o]}
+`))
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	want := map[string]string{
+		"profile": "Be terse.\n",
+		"amended": "Be terse.\n\nCite sources.",
+		"only":    "Cite sources.",
+		"unset":   "",
+	}
+	for job, text := range want {
+		if got := k.Workflow[job].Executor.AppendSystemPrompt; got != text {
+			t.Errorf("%s append_system_prompt = %q, want %q", job, got, text)
+		}
+	}
+}
+
 func TestLoadParsesBothMCPForms(t *testing.T) {
 	t.Parallel()
 
@@ -170,42 +207,43 @@ func TestLoadRejectsInvalidKatas(t *testing.T) {
 		body string
 		want error
 	}{
-		"no name":            {"workflow:\n  j: {outputs: [o]}\n", ErrName},
-		"no jobs":            {"name: k\n", ErrNoJobs},
-		"bad param name":     {"name: k\nparams:\n  ../x: {}\nworkflow:\n  j: {outputs: [o]}\n", ErrParamName},
-		"empty job":          {head + "workflow:\n  j:\n", ErrEmptyJob},
-		"no harness":         {"name: k\nagents:\n  a: {model: m}\nworkflow:\n  j: {outputs: [o]}\n", ErrHarness},
-		"no model":           {"name: k\nagents:\n  a: {harness: claude}\nworkflow:\n  j: {outputs: [o]}\n", ErrModel},
-		"negative timeout":   {"name: k\nagents:\n  a: {harness: c, model: m, timeout_seconds: -1}\nworkflow:\n  j: {outputs: [o]}\n", ErrTimeout},
-		"prompt no agent":    {head + "workflow:\n  j: {prompt: x, outputs: [o]}\n", ErrAgentPrompt},
-		"agent no prompt":    {head + "workflow:\n  j: {agent: a, outputs: [o]}\n", ErrAgentPrompt},
-		"unknown profile":    {head + "workflow:\n  j: {agent: b, prompt: x, outputs: [o]}\n", ErrUnknownAgent},
-		"amend harness":      {head + "workflow:\n  j: {agent: {profile: a, harness: codex}, prompt: x, outputs: [o]}\n", ErrAmendHarness},
-		"amend unknown":      {head + "workflow:\n  j: {agent: {profile: a, color: red}, prompt: x, outputs: [o]}\n", ErrAmendField},
-		"no evidence":        {head + "workflow:\n  j: {pre-steps: [\"true\"]}\n", ErrNoEvidence},
-		"nested output":      {head + "workflow:\n  j: {outputs: [a/b]}\n", ErrOutputName},
-		"message, no prompt": {head + "workflow:\n  j: {outputs: [message.md]}\n", ErrMessageJob},
-		"duplicate output":   {head + "workflow:\n  j: {outputs: [o, o]}\n", ErrDupOutput},
-		"unknown need":       {head + "workflow:\n  j: {needs: [x], outputs: [o]}\n", ErrUnknownNeed},
-		"cycle":              {head + "workflow:\n  a: {needs: [b], outputs: [o]}\n  b: {needs: [a], outputs: [o]}\n", ErrCycle},
-		"self cycle":         {head + "workflow:\n  a: {needs: [a], outputs: [o]}\n", ErrCycle},
-		"unknown kind":       {head + "workflow:\n  j: {post-steps: [\"cat {{input:x}}\"]}\n", ErrPlaceholder},
-		"undeclared param":   {head + "workflow:\n  j: {post-steps: [\"cat {{param:q}}\"]}\n", ErrUnknownParam},
-		"undeclared output":  {head + "workflow:\n  j: {outputs: [o], post-steps: [\"cat {{output:x}}\"]}\n", ErrUnknownOut},
-		"artifact no slash":  {head + "workflow:\n  i: {outputs: [o]}\n  j: {post-steps: [\"cat {{artifact:i}}\"]}\n", ErrArtifactRef},
-		"artifact no output": {head + "workflow:\n  i: {outputs: [o]}\n  j: {post-steps: [\"cat {{artifact:i/x}}\"]}\n", ErrUnknownOut},
-		"shell pipe":         {head + "workflow:\n  j: {post-steps: [\"cat a | wc\"]}\n", ErrShell},
-		"shell var":          {head + "workflow:\n  j: {post-steps: [\"echo $HOME\"]}\n", ErrShell},
-		"empty argv":         {head + "workflow:\n  j: {post-steps: [[]]}\n", ErrStep},
-		"MCP unknown key":    {"name: k\nagents:\n  a: {harness: c, model: m, mcps: [{url: u, optional: true}]}\nworkflow:\n  j: {outputs: [o]}\n", ErrMCPField},
-		"MCP no url":         {"name: k\nagents:\n  a: {harness: c, model: m, mcps: [{required: true}]}\nworkflow:\n  j: {outputs: [o]}\n", ErrMCPURL},
-		"open quote":         {head + "workflow:\n  j: {post-steps: [\"echo 'a\"]}\n", ErrStep},
-		"adapter two words":  {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg --flag\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
-		"adapter npx flag":   {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"-y\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
-		"adapter shell":      {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg@1;rm\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
-		"adapter quote":      {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg@'1'\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
-		"adapter path":       {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: ../pkg}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
-		"amend bad adapter":  {head + "workflow:\n  j: {agent: {profile: a, acp_adapter: \"a b\"}, prompt: x, outputs: [o]}\n", ErrACPAdapter},
+		"no name":             {"workflow:\n  j: {outputs: [o]}\n", ErrName},
+		"no jobs":             {"name: k\n", ErrNoJobs},
+		"bad param name":      {"name: k\nparams:\n  ../x: {}\nworkflow:\n  j: {outputs: [o]}\n", ErrParamName},
+		"empty job":           {head + "workflow:\n  j:\n", ErrEmptyJob},
+		"no harness":          {"name: k\nagents:\n  a: {model: m}\nworkflow:\n  j: {outputs: [o]}\n", ErrHarness},
+		"no model":            {"name: k\nagents:\n  a: {harness: claude}\nworkflow:\n  j: {outputs: [o]}\n", ErrModel},
+		"negative timeout":    {"name: k\nagents:\n  a: {harness: c, model: m, timeout_seconds: -1}\nworkflow:\n  j: {outputs: [o]}\n", ErrTimeout},
+		"prompt no agent":     {head + "workflow:\n  j: {prompt: x, outputs: [o]}\n", ErrAgentPrompt},
+		"agent no prompt":     {head + "workflow:\n  j: {agent: a, outputs: [o]}\n", ErrAgentPrompt},
+		"unknown profile":     {head + "workflow:\n  j: {agent: b, prompt: x, outputs: [o]}\n", ErrUnknownAgent},
+		"amend harness":       {head + "workflow:\n  j: {agent: {profile: a, harness: codex}, prompt: x, outputs: [o]}\n", ErrAmendHarness},
+		"amend unknown":       {head + "workflow:\n  j: {agent: {profile: a, color: red}, prompt: x, outputs: [o]}\n", ErrAmendField},
+		"no evidence":         {head + "workflow:\n  j: {pre-steps: [\"true\"]}\n", ErrNoEvidence},
+		"nested output":       {head + "workflow:\n  j: {outputs: [a/b]}\n", ErrOutputName},
+		"message, no prompt":  {head + "workflow:\n  j: {outputs: [message.md]}\n", ErrMessageJob},
+		"duplicate output":    {head + "workflow:\n  j: {outputs: [o, o]}\n", ErrDupOutput},
+		"unknown need":        {head + "workflow:\n  j: {needs: [x], outputs: [o]}\n", ErrUnknownNeed},
+		"cycle":               {head + "workflow:\n  a: {needs: [b], outputs: [o]}\n  b: {needs: [a], outputs: [o]}\n", ErrCycle},
+		"self cycle":          {head + "workflow:\n  a: {needs: [a], outputs: [o]}\n", ErrCycle},
+		"unknown kind":        {head + "workflow:\n  j: {post-steps: [\"cat {{input:x}}\"]}\n", ErrPlaceholder},
+		"undeclared param":    {head + "workflow:\n  j: {post-steps: [\"cat {{param:q}}\"]}\n", ErrUnknownParam},
+		"system prompt param": {"name: k\nagents:\n  a: {harness: claude, model: m, append_system_prompt: \"{{param:q}}\"}\nworkflow:\n  j: {agent: a, prompt: x, outputs: [o]}\n", ErrUnknownParam},
+		"undeclared output":   {head + "workflow:\n  j: {outputs: [o], post-steps: [\"cat {{output:x}}\"]}\n", ErrUnknownOut},
+		"artifact no slash":   {head + "workflow:\n  i: {outputs: [o]}\n  j: {post-steps: [\"cat {{artifact:i}}\"]}\n", ErrArtifactRef},
+		"artifact no output":  {head + "workflow:\n  i: {outputs: [o]}\n  j: {post-steps: [\"cat {{artifact:i/x}}\"]}\n", ErrUnknownOut},
+		"shell pipe":          {head + "workflow:\n  j: {post-steps: [\"cat a | wc\"]}\n", ErrShell},
+		"shell var":           {head + "workflow:\n  j: {post-steps: [\"echo $HOME\"]}\n", ErrShell},
+		"empty argv":          {head + "workflow:\n  j: {post-steps: [[]]}\n", ErrStep},
+		"MCP unknown key":     {"name: k\nagents:\n  a: {harness: c, model: m, mcps: [{url: u, optional: true}]}\nworkflow:\n  j: {outputs: [o]}\n", ErrMCPField},
+		"MCP no url":          {"name: k\nagents:\n  a: {harness: c, model: m, mcps: [{required: true}]}\nworkflow:\n  j: {outputs: [o]}\n", ErrMCPURL},
+		"open quote":          {head + "workflow:\n  j: {post-steps: [\"echo 'a\"]}\n", ErrStep},
+		"adapter two words":   {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg --flag\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"adapter npx flag":    {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"-y\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"adapter shell":       {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg@1;rm\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"adapter quote":       {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: \"pkg@'1'\"}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"adapter path":        {"name: k\nagents:\n  a: {harness: claude, model: m, acp_adapter: ../pkg}\nworkflow:\n  j: {outputs: [o]}\n", ErrACPAdapter},
+		"amend bad adapter":   {head + "workflow:\n  j: {agent: {profile: a, acp_adapter: \"a b\"}, prompt: x, outputs: [o]}\n", ErrACPAdapter},
 	}
 
 	for name, tc := range cases {

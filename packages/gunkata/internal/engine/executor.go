@@ -199,14 +199,17 @@ type execSpec struct {
 	adapter string // npm package spec; unset keeps acpx's built-in
 	model   string
 	prompt  string
-	options map[string]string
-	skills  []string // snapshot dirs
-	mcps    []string // URLs, ${VAR} unexpanded
-	timeout time.Duration
-	home    string
-	work    string
-	jobDir  string // holds the executor's stream and stderr
-	message string // where the agent's final message is written
+	// appendSystemPrompt is appended to the agent's system prompt; unset
+	// leaves it as the harness ships it.
+	appendSystemPrompt string
+	options            map[string]string
+	skills             []string // snapshot dirs
+	mcps               []string // URLs, ${VAR} unexpanded
+	timeout            time.Duration
+	home               string
+	work               string
+	jobDir             string // holds the executor's stream and stderr
+	message            string // where the agent's final message is written
 	// privateTmp mounts home/tmp over the executor's /tmp.
 	privateTmp bool
 	caches     []string // VAR=dir entries
@@ -388,7 +391,8 @@ func superviseExecutor(
 		"timeout_s", int(spec.timeout.Seconds()),
 		"mcps", mapped(spec.mcps, mcpName),
 		"skills", mapped(spec.skills, filepath.Base),
-		"prompt_len", len(spec.prompt))
+		"prompt_len", len(spec.prompt),
+		"append_system_prompt_len", len(spec.appendSystemPrompt))
 
 	code, err := waitGrouped(cmd)
 
@@ -523,6 +527,11 @@ func acpxArgs(spec execSpec, mcpFlags []string) []string {
 		"--timeout", strconv.Itoa(int(spec.timeout.Seconds())),
 		"--approve-all",
 		"--format", "json", "--json-strict",
+	}
+
+	if spec.appendSystemPrompt != unset {
+		args = append(args,
+			"--append-system-prompt", spec.appendSystemPrompt)
 	}
 
 	args = append(args, mcpFlags...)

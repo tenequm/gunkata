@@ -929,6 +929,56 @@ workflow:
 	}
 }
 
+// TestRunAppendsToTheSystemPrompt holds append_system_prompt to one acpx
+// global flag, a job's amendment joined after its profile's text with
+// placeholders expanded, no flag when unset, and only its length logged.
+func TestRunAppendsToTheSystemPrompt(t *testing.T) {
+	stubACPX(t)
+	t.Setenv("HOME", t.TempDir())
+
+	res := mustRun(t, `
+name: stub-system-prompt
+params:
+  style: {default: haiku}
+agents:
+  terse: {harness: claude, model: m, append_system_prompt: "Be terse."}
+  plain: {harness: claude, model: m}
+workflow:
+  profile: {agent: terse, prompt: "ACTION=write\nTARGET={{output:o}}", outputs: [o]}
+  amended:
+    agent: {profile: terse, append_system_prompt: "Answer in {{param:style}}."}
+    prompt: "ACTION=write\nTARGET={{output:o}}"
+    outputs: [o]
+  unset: {agent: plain, prompt: "ACTION=write\nTARGET={{output:o}}", outputs: [o]}
+`, nil)
+	if res.Outcome != OutcomeSucceeded {
+		t.Fatalf("Run() = %+v", res)
+	}
+
+	const flag = "--json-strict\n--append-system-prompt\n"
+
+	want := map[string]string{
+		"profile": flag + "Be terse.\nclaude\nexec\n",
+		"amended": flag + "Be terse.\n\nAnswer in haiku.\nclaude\nexec\n",
+	}
+	for job, args := range want {
+		argv := readFile(t, filepath.Join(res.RunDir, jobsDir, job, homeDir, "argv.txt"))
+		if !strings.Contains(argv, args) {
+			t.Errorf("%s acpx argv = %q, want %q", job, argv, args)
+		}
+	}
+
+	unsetArgv := readFile(t, filepath.Join(res.RunDir, jobsDir, "unset", homeDir, "argv.txt"))
+	if strings.Contains(unsetArgv, "--append-system-prompt") {
+		t.Errorf("a profile without append_system_prompt passed the flag: %q", unsetArgv)
+	}
+
+	log := readFile(t, filepath.Join(res.RunDir, runLog))
+	if strings.Contains(log, "Be terse") || !strings.Contains(log, `"append_system_prompt_len":9`) {
+		t.Error("gunkata.log must measure the appended system prompt, never hold it")
+	}
+}
+
 func TestRunTimeoutKillsTheProcessGroup(t *testing.T) {
 	stubACPX(t)
 
@@ -1058,6 +1108,8 @@ func TestRunRejectsBeforeRunning(t *testing.T) {
 		"unset MCP var":    {"name: k\nagents:\n  a: {harness: claude, model: m, mcps: [{url: \"https://x/${" + mcpVarName + "}\", required: true}]}\n" + job, nil, errMCPVar},
 		"skills on pi":     {"name: k\nagents:\n  a: {harness: pi, model: m, skills: [./s]}\n" + job, nil, errSkillDirs},
 		"adapter on agy":   {"name: k\nagents:\n  a: {harness: agy, model: m, acp_adapter: pkg@1}\n" + job, nil, errAdapterHarness},
+		"prompt on codex":  {"name: k\nagents:\n  a: {harness: codex, model: m, append_system_prompt: x}\n" + job, nil, errSystemPromptHarness},
+		"prompt on agy":    {"name: k\nagents:\n  a: {harness: agy, model: m}\nworkflow:\n  j: {agent: {profile: a, append_system_prompt: x}, prompt: x, outputs: [o]}\n", nil, errSystemPromptHarness},
 		"bad skill URL":    {"name: k\nagents:\n  a: {harness: claude, model: m, skills: [\"https://github.com/o/r\"]}\n" + job, nil, errSkillURL},
 	}
 

@@ -13,6 +13,10 @@ agents:
     model: claude-opus-5
     acp_adapter: "@agentclientprotocol/claude-agent-acp@0.79.0"   # optional: pins the ACP
                                   # adapter package acpx runs via npx; absent = acpx's own
+    # optional, claude only: appended to the agent's own system prompt;
+    # placeholders expand here as in prompt
+    append_system_prompt: |
+      Work in small, reviewable commits.
     timeout_seconds: 3600
     options:                      # harness-specific settings, passed through the adapter
       reasoning_effort: high
@@ -53,12 +57,14 @@ workflow:
       - test -s {{output:summary.md}}
 
   # An agent job amending the profile (object form): scalars replace, lists append,
-  # options keys win; harness may not be amended.
+  # options keys win; append_system_prompt appends after a blank line; harness may
+  # not be amended.
   check:
     agent:
       profile: executor
       model: claude-sonnet-5
       timeout_seconds: 900
+      append_system_prompt: Judge only what the summary claims.
       skills:
         - https://github.com/tenequm/skills/tree/main/skills/polish
     needs: [work]

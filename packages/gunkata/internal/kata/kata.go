@@ -46,6 +46,8 @@ const (
 	quotedFmt  = "%w: %q"
 	// A YAML mapping node's content alternates key and value.
 	pairStride = 2
+	// blankLine joins a job's appended system prompt text to its profile's.
+	blankLine = "\n\n"
 )
 
 // Validation failures, wrapped with whatever they concern.
@@ -120,6 +122,8 @@ type Profile struct {
 	// ACPAdapter pins the npm package acpx runs as the harness's adapter;
 	// unset keeps acpx's built-in one.
 	ACPAdapter string `yaml:"acp_adapter"`
+	// AppendSystemPrompt is text appended to the agent's system prompt.
+	AppendSystemPrompt string `yaml:"append_system_prompt"`
 }
 
 // mcpEntry is one MCP server. An optional server whose URL references an
@@ -156,7 +160,7 @@ type Step []string
 // amendFields are the keys an agent amendment may carry.
 var amendFields = []string{
 	keyProfile, "model", "timeout_seconds", "options", "skills", "mcps",
-	"acp_adapter",
+	"acp_adapter", "append_system_prompt",
 }
 
 // UnmarshalYAML takes a profile name or an amendment object.
@@ -497,8 +501,8 @@ func (k *Kata) resolveExecutor(job *Job) error {
 	return nil
 }
 
-// merge applies an amendment to a profile: scalars replace, lists append,
-// options keys win.
+// merge applies an amendment to a profile: scalars replace, lists and the
+// appended system prompt append, options keys win.
 func merge(base, amend Profile) Profile {
 	merged := Profile{
 		Harness: base.Harness,
@@ -509,6 +513,8 @@ func merge(base, amend Profile) Profile {
 		Skills:     slices.Concat(base.Skills, amend.Skills),
 		MCPs:       slices.Concat(base.MCPs, amend.MCPs),
 		ACPAdapter: cmp.Or(amend.ACPAdapter, base.ACPAdapter),
+		AppendSystemPrompt: joinText(
+			base.AppendSystemPrompt, amend.AppendSystemPrompt),
 	}
 
 	maps.Copy(merged.Options, base.Options)
@@ -517,9 +523,21 @@ func merge(base, amend Profile) Profile {
 	return merged
 }
 
+// joinText appends amend to base as a paragraph of its own.
+func joinText(base, amend string) string {
+	if base == unset || amend == unset {
+		return base + amend
+	}
+
+	return strings.TrimRight(base, "\n") + blankLine + amend
+}
+
 // texts is every string of the job placeholders may appear in.
 func (job *Job) texts() []string {
 	texts := []string{job.Prompt}
+	if job.Executor != nil {
+		texts = append(texts, job.Executor.AppendSystemPrompt)
+	}
 	for _, step := range slices.Concat(job.PreSteps, job.PostSteps) {
 		texts = append(texts, step...)
 	}
