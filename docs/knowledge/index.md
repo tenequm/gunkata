@@ -45,5 +45,6 @@ Enter through this listing and open only what the task needs.
 
 # References
 
+* [2026-09-19 report - why a gunkata review missed a bug a session review found (cuttle PR 73)](references/2609-19-cuttle-pr73-review-forensics.md) - Dated forensic report comparing /polish reviews of glim-sh/cuttle#73 run through the gunkata review kata and from a Claude Code session, with the same model, effort, skill and prompt; the kata miss traced to lead prompt anchoring, a checkout mutated mid-review and reasoning variance - not tools, MCP, skills, CLAUDE.md, model or effort - plus the wall-time breakdown and the harness and kata changes that followed.
 * [Executor models field guide](references/executor-models-field-guide.md) - What each executor family advertises over ACP, what has actually been measured about those models, and the traps that make a wrong choice look like an infrastructure fault - the answer to "which model goes on this node".
 * [pond PR 289 as a review ground-truth case](references/pond-pr-289-review-ground-truth.md) - A hand /polish review of tenequm/pond#289 (lance 12 upgrade) with 8 findings and 10 validated non-findings, pinned to head 6a83a53, held as the grading key for a future replay of the gunkata review flow.
