@@ -128,6 +128,13 @@ its executor's HOME: Claude Code searches the cwd's ancestors for skills up to H
 work dir outside it would reach the operator's real home. The log names MCP servers and measures the
 prompt; it never holds expanded MCP URLs, environment values or the prompt text.
 
+An executor sees its `home/tmp` as `/tmp`, so scratch an agent writes to a literal `/tmp`
+path stays in the run dir. This is best effort: it needs Linux with unprivileged user
+namespaces, and a run dir outside `/tmp`. Where either is missing, the run's executors
+share the host's `/tmp`, `gunkata.log` warns once, and `record.json` states
+`private_tmp: false` with a `private_tmp_reason`; otherwise it states `private_tmp: true`.
+A run with no executor job states neither.
+
 ## Principles
 
 Held here in quarantine until each proves its keep:

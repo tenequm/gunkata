@@ -954,6 +954,10 @@ func TestRunRejectsBeforeRunning(t *testing.T) {
 }
 
 func TestRunGivesTheExecutorAPrivateTmp(t *testing.T) {
+	if err := probePrivateTmp(); err != nil {
+		t.Skipf("this host cannot give executors a private /tmp: %v", err)
+	}
+
 	stubACPX(t)
 
 	scratch := "gunkata-probe-" + strconv.Itoa(os.Getpid())
@@ -972,7 +976,12 @@ workflow:
     outputs: [tmp.txt]
 `, nil)
 
-	assertStates(t, readRecord(t, res.RunDir), map[string]jobState{"scratch": stateDone})
+	rec := readRecord(t, res.RunDir)
+	assertStates(t, rec, map[string]jobState{"scratch": stateDone})
+
+	if rec.PrivateTmp == nil || !*rec.PrivateTmp || rec.TmpReason != unset {
+		t.Errorf("record private_tmp = %v, reason %q; want true", rec.PrivateTmp, rec.TmpReason)
+	}
 
 	private := filepath.Join(res.RunDir, jobsDir, "scratch", homeDir, tmpDir, scratch)
 	if readFile(t, private) != "scratch\n" {
@@ -991,24 +1000,41 @@ workflow:
 	}
 }
 
-func TestRunRefusesARunsRootUnderTmp(t *testing.T) {
+func TestRunFallsBackToTheSharedTmp(t *testing.T) {
 	stubACPX(t)
 
+	// A run dir under /tmp would vanish under the executor's own /tmp.
 	root := filepath.Join("/tmp", "gunkata-runs-"+strconv.Itoa(os.Getpid()))
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 
-	_, err := Run(context.Background(), Options{
-		KataPath: writeFile(t, filepath.Join(t.TempDir(), "k.kata.yml"),
-			"name: k\nagents:\n  a: {harness: claude, model: m}\n"+
-				"workflow:\n  j: {agent: a, prompt: x, outputs: [o]}\n"),
+	res, err := Run(context.Background(), Options{
+		KataPath: writeFile(t, filepath.Join(t.TempDir(), "k.kata.yml"), `
+name: stub-shared-tmp
+agents:
+  stub: {harness: claude, model: m, timeout_seconds: 7}
+workflow:
+  j:
+    agent: stub
+    prompt: |
+      ACTION=write
+      TARGET={{output:o.txt}}
+    outputs: [o.txt]
+`),
 		RunsRoot: root,
 	})
-	if !errors.Is(err, errRunsUnderTmp) {
-		t.Errorf("Run() error = %v, want %v", err, errRunsUnderTmp)
+	if err != nil {
+		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if exists(root) {
-		t.Errorf("a rejected run created %s", root)
+	rec := readRecord(t, res.RunDir)
+	assertStates(t, rec, map[string]jobState{"j": stateDone})
+
+	if rec.PrivateTmp == nil || *rec.PrivateTmp || !strings.Contains(rec.TmpReason, sharedTmp) {
+		t.Errorf("record private_tmp = %v, reason %q; want false with a reason", rec.PrivateTmp, rec.TmpReason)
+	}
+
+	if log := readFile(t, filepath.Join(res.RunDir, runLog)); !strings.Contains(log, "executors share the host /tmp") {
+		t.Error("gunkata.log does not warn that executors share the host /tmp")
 	}
 }
 

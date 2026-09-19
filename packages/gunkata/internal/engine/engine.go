@@ -112,7 +112,7 @@ func prepare(opts Options) (*kata.Kata, map[string]string, error) {
 		return nil, nil, err
 	}
 
-	if checkErr := preflight(k, opts.RunsRoot); checkErr != nil {
+	if checkErr := preflight(k); checkErr != nil {
 		return nil, nil, checkErr
 	}
 
@@ -203,8 +203,8 @@ func bindParams(k *kata.Kata, given map[string]string) (
 }
 
 // preflight rejects what would fail mid-run: skills a harness cannot load,
-// variables a required MCP server lacks, executors without a private /tmp.
-func preflight(k *kata.Kata, runsRoot string) error {
+// variables a required MCP server lacks.
+func preflight(k *kata.Kata) error {
 	if err := checkSkills(k); err != nil {
 		return err
 	}
@@ -215,11 +215,7 @@ func preflight(k *kata.Kata, runsRoot string) error {
 		}
 	}
 
-	if !slices.ContainsFunc(k.Jobs(), hasExecutor) {
-		return nil
-	}
-
-	return checkPrivateTmp(runsRoot)
+	return nil
 }
 
 func hasExecutor(job *kata.Job) bool { return job.Executor != nil }
@@ -231,21 +227,34 @@ const sharedTmp = "/tmp"
 var errRunsUnderTmp = errors.New("runs root is under " + sharedTmp +
 	", which each executor sees replaced by its own")
 
-// checkPrivateTmp refuses a run whose executors could not get a private
-// /tmp, rather than let their scratch files leak into the host's: the run
-// dir must not lie under what that /tmp hides, and the host must allow it.
-func checkPrivateTmp(runsRoot string) error {
-	root, err := filepath.Abs(runsRoot)
-	if err != nil {
-		return fmt.Errorf("resolve runs root: %w", err)
-	}
-
-	rel, err := filepath.Rel(sharedTmp, root)
+// checkPrivateTmp says why the run's executors cannot get a private /tmp,
+// or nil when they can: the run dir must not lie under what that /tmp
+// hides, and the host must allow the namespace.
+func checkPrivateTmp(runDir string) error {
+	rel, err := filepath.Rel(sharedTmp, runDir)
 	if err == nil && !strings.HasPrefix(rel, "..") {
-		return fmt.Errorf("%w: %s", errRunsUnderTmp, root)
+		return fmt.Errorf("%w: %s", errRunsUnderTmp, runDir)
 	}
 
 	return probePrivateTmp()
+}
+
+// choosePrivateTmp probes once per run with an executor job. Where the host
+// cannot give executors a private /tmp they run with the shared one, which
+// the log warns about and the record states.
+func (s *scheduler) choosePrivateTmp() {
+	if !slices.ContainsFunc(s.kata.Jobs(), hasExecutor) {
+		return
+	}
+
+	err := checkPrivateTmp(s.layout.dir)
+	active := err == nil
+	s.privateTmp = &active
+
+	if err != nil {
+		s.tmpReason = err.Error()
+		s.log.Warn("executors share the host /tmp", keyErr, err)
+	}
 }
 
 // checkMCPs refuses a required MCP server whose URL references an unset
@@ -286,6 +295,7 @@ func setup(
 
 	s := newScheduler(k, l, params, skills.snapshots, log)
 	s.skillSources = skills.sources
+	s.choosePrivateTmp()
 
 	return s, nil
 }
@@ -303,6 +313,10 @@ type scheduler struct {
 	// settled is closed per job once its record is final.
 	settled      map[string]chan struct{}
 	skillSources map[string]string
+	// privateTmp is whether executors get their own /tmp; nil when the run
+	// has no executor. tmpReason says why not.
+	privateTmp *bool
+	tmpReason  string
 }
 
 func newScheduler(
@@ -505,7 +519,9 @@ func (s *scheduler) runPrompt(
 		home:    s.layout.home(job.Name),
 		work:    s.layout.work(job.Name),
 		jobDir:  s.layout.jobDir(job.Name),
-		log:     log,
+		// set only for a run with an executor job, which this is
+		privateTmp: *s.privateTmp,
+		log:        log,
 	})
 	if err != nil {
 		return fmt.Sprintf("executor: %v", err)
@@ -567,6 +583,8 @@ func (s *scheduler) record(started, finished time.Time) *record {
 		StartedAt:  stamp(started),
 		FinishedAt: stamp(finished),
 		Skills:     s.skillSources,
+		PrivateTmp: s.privateTmp,
+		TmpReason:  s.tmpReason,
 		Jobs:       s.jobs,
 	}
 

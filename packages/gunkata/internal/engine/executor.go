@@ -177,18 +177,20 @@ var githubAuth = []string{".config/gh", ".config/git", ".onecli"}
 
 // execSpec is one acpx invocation.
 type execSpec struct {
-	harness  string
-	model    string
-	prompt   string
-	options  map[string]string
-	skills   []string // snapshot dirs
-	mcps     []string // URLs, ${VAR} unexpanded
-	timeout  time.Duration
-	home     string
-	work     string
-	jobDir   string // holds the executor's stream and stderr
-	npmCache string
-	log      *slog.Logger
+	harness string
+	model   string
+	prompt  string
+	options map[string]string
+	skills  []string // snapshot dirs
+	mcps    []string // URLs, ${VAR} unexpanded
+	timeout time.Duration
+	home    string
+	work    string
+	jobDir  string // holds the executor's stream and stderr
+	// privateTmp mounts home/tmp over the executor's /tmp.
+	privateTmp bool
+	npmCache   string
+	log        *slog.Logger
 }
 
 // runExecutor starts acpx bare - whitelisted environment, engine-owned HOME,
@@ -239,8 +241,7 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 	events := &eventStream{log: spec.log, tools: map[string]*toolCall{}}
 	cmd := executorCmd(cmdCtx, bin, spec, mcpConfig)
 
-	err = confinePrivateTmp(cmd, filepath.Join(spec.home, tmpDir))
-	if err != nil {
+	if err := maybeConfine(cmd, spec); err != nil {
 		return noExit, err
 	}
 
@@ -249,6 +250,15 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 	cmd.Stderr = stderr
 
 	return superviseExecutor(cmdCtx, cmd, spec, events)
+}
+
+// maybeConfine gives the executor its own /tmp when the run has one.
+func maybeConfine(cmd *exec.Cmd, spec execSpec) error {
+	if !spec.privateTmp {
+		return nil
+	}
+
+	return confinePrivateTmp(cmd, filepath.Join(spec.home, tmpDir))
 }
 
 func executorCmd(

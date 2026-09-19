@@ -71,8 +71,12 @@ type record struct {
 	Params map[string]string `json:"params,omitempty"`
 	// Skills maps each declared skill to the SHA or local path it was
 	// snapshotted from.
-	Skills map[string]string     `json:"skills,omitempty"`
-	Jobs   map[string]*jobRecord `json:"jobs"`
+	Skills map[string]string `json:"skills,omitempty"`
+	// PrivateTmp states whether executors saw their own /tmp or the host's,
+	// and TmpReason why not; absent in a run with no executor.
+	PrivateTmp *bool                 `json:"private_tmp,omitempty"`
+	TmpReason  string                `json:"private_tmp_reason,omitempty"`
+	Jobs       map[string]*jobRecord `json:"jobs"`
 }
 
 // jobRecord holds one job's evidence. A nil field means that evidence never

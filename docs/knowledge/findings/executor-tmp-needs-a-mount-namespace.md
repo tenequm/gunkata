@@ -1,11 +1,11 @@
 ---
 type: Finding
 title: TMPDIR does not keep an executor out of /tmp - only a mount namespace does
-description: Agents hardcode /tmp regardless of TMPDIR, so an executor's scratch leaks into the shared host /tmp; an unprivileged user+mount namespace that bind-mounts the job's HOME/tmp over /tmp confines it with stdlib Go, keeps the pid and process group, and needs the host to allow unprivileged user namespaces.
+description: Agents hardcode /tmp regardless of TMPDIR, so an executor's scratch leaks into the shared host /tmp; an unprivileged user+mount namespace that bind-mounts the job's HOME/tmp over /tmp confines it with stdlib Go and keeps the pid and process group, best effort - hosts without unprivileged user namespaces fall back to the shared /tmp, recorded as private_tmp false.
 tags: [executor, isolation, linux, namespaces, tmp]
 status: stable
 stale_after: "2027-03-31T00:00:00Z"
-generated: { by: claude-code/opus-5, at: "2026-09-19T00:20:00Z" }
+generated: { by: claude-code/opus-5, at: "2026-09-19T00:40:00Z" }
 sources:
   - id: leak
     resource: "gunkata review run on ws-pond-01, 2026-09-18: a claude executor ran gh pr checkout into /tmp/glim-sh-cuttle-pr-73 with TMPDIR=<job home>/tmp set"
@@ -55,17 +55,20 @@ worked, and the run left no process behind.[^live]
   elevate; host `/tmp` sockets (X11, tmux, a `/tmp` ssh-agent) are unreachable. `/var/tmp`
   and `/dev/shm` stay shared.
 - **Constraint:** anything under `/tmp` the executor must reach disappears - the run dir
-  most of all, so the engine refuses a runs root under `/tmp` at preflight; an acpx
+  most of all, so a run dir under `/tmp` falls back to the shared `/tmp`; an acpx
   binary under `/tmp` would fail to exec. Tests move `TMPDIR` off `/tmp` for this reason.
 
-## Hosts that refuse
+## Hosts that cannot
 
-The engine probes at preflight, once per run with any executor job, and refuses the run
-rather than fall back to a shared `/tmp`. Ubuntu 24.04 - including GitHub's
-`ubuntu-latest` runners - restricts unprivileged user namespaces through AppArmor
-(`kernel.apparmor_restrict_unprivileged_userns=1`), which is reported to break exactly
-this unprivileged mount (not verified here); the
-remedy is that sysctl set to 0 or a per-binary AppArmor profile.[^ubuntu] On this NixOS
-devbox the namespace is allowed (`max_user_namespaces` 257090, no AppArmor restriction);
-`bwrap` is not installed, and `unshare(1)` alone cannot bind-mount without a shell and
-`mount(8)` inside. Non-Linux hosts refuse executor jobs outright.
+It is best effort. The engine probes once per run that has an executor job; when the host
+cannot do it - no unprivileged user namespaces, an AppArmor restriction, a non-Linux host,
+or a run dir under `/tmp` - the executors run with the shared `/tmp`, `gunkata.log` warns
+once with the reason, and `record.json` carries `private_tmp: false` and
+`private_tmp_reason`. Refusing the run instead was rejected: it would have made gunkata
+unusable on macOS and on GitHub's runners. Ubuntu 24.04, including GitHub's
+`ubuntu-latest` runners, restricts unprivileged user namespaces through AppArmor
+(`kernel.apparmor_restrict_unprivileged_userns=1`). Reports say this breaks exactly this
+kind of unprivileged mount; it was not verified here. The remedy is that sysctl set to 0
+or a per-binary AppArmor profile.[^ubuntu] On this NixOS devbox the namespace is allowed
+(`max_user_namespaces` 257090, no AppArmor restriction). `bwrap` is not installed, and
+`unshare(1)` alone cannot bind-mount without a shell and `mount(8)` inside.
