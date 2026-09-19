@@ -140,6 +140,8 @@ func stubACPX(t *testing.T) {
 
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GUNKATA_POISON", "must-not-cross")
+	// The shared npm cache lands here, never in the host's.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 }
 
 func writeFile(t *testing.T, path, body string) string {
@@ -586,6 +588,13 @@ func assertExecutorEnv(t *testing.T, home string) {
 		"XDG_DATA_HOME":   filepath.Join(home, xdgDataDir),
 		"XDG_STATE_HOME":  filepath.Join(home, xdgStateDir),
 		"XDG_CACHE_HOME":  filepath.Join(home, xdgCacheDir),
+		// Engine-side, shared by every executor, so no job re-installs the
+		// ACP adapter into its bare home.
+		"npm_config_cache": filepath.Join(os.Getenv("XDG_CACHE_HOME"), npmCacheDir),
+	}
+
+	if !exists(want["npm_config_cache"]) {
+		t.Error("the shared npm cache was not created")
 	}
 
 	for key, value := range want {

@@ -69,6 +69,13 @@ const (
 	xdgCacheDir  = ".cache"
 )
 
+// npmCacheDir is the engine-owned npm cache under the host's cache dir.
+// acpx 0.17 runs the claude and codex adapters through npm exec, which
+// would otherwise download and install hundreds of MB into each bare HOME.
+// It holds package code, never config, and is no new write capability: an
+// executor runs as the engine's uid on an unsandboxed filesystem.
+const npmCacheDir = "gunkata/npm"
+
 // inherited is the whitelist that crosses the executor boundary. Skills,
 // agent instruction files, MCP config and everything else stay outside. On
 // NixOS the last one tells a shell its environment is already set up;
@@ -156,17 +163,18 @@ var githubAuth = []string{".config/gh", ".config/git", ".onecli"}
 
 // execSpec is one acpx invocation.
 type execSpec struct {
-	harness string
-	model   string
-	prompt  string
-	options map[string]string
-	skills  []string // snapshot dirs
-	mcps    []string // URLs, ${VAR} unexpanded
-	timeout time.Duration
-	home    string
-	work    string
-	jobDir  string // holds the executor's stream and stderr
-	log     *slog.Logger
+	harness  string
+	model    string
+	prompt   string
+	options  map[string]string
+	skills   []string // snapshot dirs
+	mcps     []string // URLs, ${VAR} unexpanded
+	timeout  time.Duration
+	home     string
+	work     string
+	jobDir   string // holds the executor's stream and stderr
+	npmCache string
+	log      *slog.Logger
 }
 
 // runExecutor starts acpx bare - whitelisted environment, engine-owned HOME,
@@ -184,6 +192,11 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 
 	if prepErr := prepareHome(spec); prepErr != nil {
 		return noExit, prepErr
+	}
+
+	spec.npmCache, err = sharedNPMCache()
+	if err != nil {
+		return noExit, err
 	}
 
 	mcpConfig, err := mcpConfigJSON(spec.mcps)
@@ -226,7 +239,8 @@ func executorCmd(
 	//nolint:gosec // G204: bin is acpx on PATH; the args are the kata's
 	cmd := exec.CommandContext(ctx, bin, acpxArgs(spec, mcpFlags)...)
 	cmd.Dir = spec.work
-	cmd.Env = append(executorEnv(spec.home), harnessEnv[spec.harness]...)
+	cmd.Env = append(executorEnv(spec.home, spec.npmCache),
+		harnessEnv[spec.harness]...)
 
 	if mcpConfig != nil {
 		cmd.Stdin = bytes.NewReader(mcpConfig)
@@ -474,10 +488,12 @@ func expandMCP(raw string) (string, error) {
 }
 
 // executorEnv is the whole environment an executor gets: the whitelist, plus
-// the engine-owned home and the paths that hang off it.
-func executorEnv(home string) []string {
+// the engine-owned home and the paths that hang off it, and the shared npm
+// cache.
+func executorEnv(home, npmCache string) []string {
 	env := []string{
 		"HOME=" + home,
+		"npm_config_cache=" + npmCache,
 		"TERM=dumb",
 		"TMPDIR=" + filepath.Join(home, tmpDir),
 		"XDG_CONFIG_HOME=" + filepath.Join(home, xdgConfigDir),
@@ -493,6 +509,23 @@ func executorEnv(home string) []string {
 	}
 
 	return env
+}
+
+// sharedNPMCache creates the npm cache every executor shares. npm keeps it
+// safe for concurrent use: content-addressed writes, and a lock around each
+// npm exec install.
+func sharedNPMCache() (string, error) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return unset, fmt.Errorf("resolve cache dir: %w", err)
+	}
+
+	dir := filepath.Join(cache, npmCacheDir)
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return unset, fmt.Errorf("create npm cache: %w", err)
+	}
+
+	return dir, nil
 }
 
 // prepareHome builds the executor's directories, links in the credentials
