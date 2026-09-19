@@ -184,6 +184,28 @@ recurrent non-key findings; the recurring set is all 25 findings raised by 4+ re
   glob through literally) in two session reports, and one kata aside calling an endpoint
   loopback-only (it binds 0.0.0.0 in a container).
 
+# Why two kata runs cleared K1
+
+Investigated on the two misses (20260919T090454Z1d23, 20260919T090634Z504d).[^k1]
+
+- In both, the side-effect agent cleared K1 itself after reading all of `pool.go`
+  (`removeProcess`, `cancelIdleLocked`, the pool-mode launch path). Its clearance rested on
+  an incomplete case list: "every mover of the refcount/deadline ... re-establishes a future
+  deadline" (writers only) and "`cancelIdleLocked` callers either delete the process or
+  re-arm" (treating delete as final, though `getOrLaunch` deletes then relaunches under the
+  same key), plus "the reap waits on the lock, so it is serialized" - the waiter's premise was
+  captured before the lock holder changed the state.
+- polish Phase 4 validates only positive findings, so an agent's "this holds" passed into
+  "Dropped after validation" unaudited; no other agent happened to report K1.
+- Hits asked what the guard does when the map entry is absent and walked
+  `getOrLaunch:474 -> removeProcess -> cancelIdleLocked` concretely. In kata runs K1 came
+  mostly from the design agent (4/7); in session runs from the side-effect agent (5/5).
+- Generic fixes proposed, none naming K1: clearances must cite every write and delete site
+  of the state the guard reads; an absent-map-entry rule; a queued-waiter rule; Phase 4
+  audits clearances or labels them "cleared by agent, not validated"; a replaced guard
+  needs a counterexample search against the base fix's commit message and tests; case lists
+  in prompts are floors; a repro-test attempt before dropping a race.
+
 # Wall time: kata 1140 s vs session 548 s (medians)
 
 Ranked by seconds on the critical path; the first three overlap.[^timing]
@@ -209,3 +231,4 @@ and the adapter version. Fixed per-call latency is identical (median 3.5 s both 
 [^harness]: harness investigation subagent a46d538d7967a72d0, 2026-09-19
 [^judge]: blind judge subagent ac8c0138476a3399f; reports anonymized as R01-R12
 [^timing]: timing forensics subagent a6f62f4994b6fc44a
+[^k1]: K1-miss forensics subagent a7df257383b02ac26, 2026-09-19; dumps in that session's scratchpad/forensic/
