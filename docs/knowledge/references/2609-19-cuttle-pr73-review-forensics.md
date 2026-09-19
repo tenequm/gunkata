@@ -586,6 +586,41 @@ DAG line clears findings the single-lead runs keep: no skeptic ever attacked a c
 Runtime fan-out is an engine feature, and the first one to build if the DAG is to beat one
 agent with subagents.
 
+# What a run costs against the subscription window
+
+The binding limit is a rolling 5-hour window, not money. One window measured at about $152
+of usage: cumulative in-window spend reached $132.50 at 16:41 while the gauge read 87% at
+16:50.[^quota] Prices fitted on the 33 subagent-free jobs of the day reproduce every one of
+them with zero residual: per Mtok, opus-5 $5 in, $10 cache write, $0.50 cache read, $25 out;
+sonnet-5 and haiku-4.5 at two fifths and one fifth of that. All cache creation was the
+one-hour kind, so published headline pricing misses opus by 165%. codex and agy runs bill
+nothing against the subscription.
+
+The constant worth remembering: an Opus executor costs $0.95 to $1.01 per wall-clock minute,
+across 21 runs of every kata shape measured. A DAG does not cost more per minute; it fills
+the time with more parallel streams. So one window is roughly 120 Opus executor-minutes, and
+in window terms a review run is 10.4%, review-2 20.0%, review-2b 22.6%, review-2c 25.3%, an
+analysis subagent 1.7%, one lens on opus 2.7% and the same lens on sonnet 0.5%.
+
+Executors dominate but the orchestrator is not free: in the 12:40 to 17:40 window, executors
+took $94.39 and the orchestrating session $38.11, which is 29% of the spend for 8% of the
+output tokens. The session re-reads about 243k cached tokens per turn, so each turn costs
+about 0.12% of a window before it does anything, and every large file read in the main
+session raises that floor permanently.
+
+Waste is concentrated and measurable: four runs parked at the limit on 2026-09-19 spent
+$36.63 and returned nothing; a seven-way replication cost 83% of a window; a concurrent pair
+of review-2b runs cost 45% in forty minutes. The standing limits this argues for live in
+`/AGENTS.md` under "Quota ceiling for live runs".
+
+Three accounting gaps stand in the way of doing this from the engine alone.[^quota] A job's
+`turn end` line carries lead-only usage but a cost that includes the executor's own
+subagents, so the two fields are not comparable and `record.json` carries neither; a parked
+run emits no `turn end` at all, so its spend is invisible to any log-based accounting; and
+executors never reach pond, because an engine-owned HOME puts their transcripts inside the
+run dir. Writing per-job usage and cost, for the lead and its subagents separately, into
+`record.json`, and emitting one on park and on timeout, would close the first two.
+
 [^pr]: https://github.com/glim-sh/cuttle/pull/73
 [^runs]: the kata run dirs on ws-pond-01
 [^session]: the session-path transcripts, indexed in pond
@@ -605,4 +640,5 @@ agent with subagents.
 [^judge3]: blind judge 3, scratchpad/judge3/scores.md; reports anonymized as Y1-Y5
 [^lensab]: the sonnet/opus cleanliness-lens A/B, scratchpad/lensab/notes.md
 [^lensx]: the codex and agy cleanliness-lens runs
+[^quota]: quota attribution subagent ab54b393202220611, 2026-09-19; method and tables in that session's scratchpad/quota/notes.md
 [^polishnew]: https://github.com/tenequm/skills/blob/main/skills/polish-new/SKILL.md
