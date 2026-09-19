@@ -3,7 +3,8 @@
 # Run: gunkata run katas/review.kata.yml -p pr=https://github.com/<owner>/<repo>/pull/<n>
 #
 # The deliverable is artifacts/review/report.md in the run dir. The executor reaches
-# GitHub with the host's own gh and git access.
+# GitHub with the host's own gh and git access. One pass on opus at high effort: a
+# stronger single pass beat three default-effort passes on the same PR.
 name: review
 
 params:
@@ -12,8 +13,10 @@ params:
 agents:
   executor:
     harness: claude
-    model: claude-sonnet-5
+    model: claude-opus-5
     timeout_seconds: 3600
+    options:
+      effort: high
     skills:
       - https://github.com/tenequm/skills/tree/main/skills/gh-cli
       - https://github.com/tenequm/skills/tree/main/skills/polish
@@ -28,5 +31,8 @@ workflow:
       Run /polish {{param:pr}} review. This is review mode: report findings, never
       edit, commit, push or comment on the PR. No one is available to confirm -
       running the validation command taken from the base branch is pre-approved.
+      Check the PR against the current base branch too: how far behind it is, whether
+      it conflicts, and whether the base has since changed the code the PR touches.
+      Keep every checkout and scratch file in your working directory, never in /tmp.
       Write the full review report to {{output:report.md}}.
     outputs: [report.md]
