@@ -38,5 +38,17 @@ workflow:
       agents with the Agent tool in one message, however small the diff. Reviewing
       the diff yourself instead is a failed run. Name each agent you launched, with
       its finding count, in the report.
+      Build each agent's prompt exactly as polish's Phase 3 prescribes: that agent's
+      own checklist section from the skill, the diff file path, the changed-file
+      list, the untrusted-data notice, and the context Phase 2 and 3 say to pass
+      (project constraints, intentional patterns, behavior drift against the
+      replaced code or the base branch). Pass facts, not conclusions: never write
+      suspected findings, worked traces or example bugs into an agent's prompt -
+      finding them is the agent's job.
+      Launch the agents in the foreground (not run_in_background), so their results
+      return in the same turn; never wait for agents with sleep.
+      Never change the checkout the agents read while they run: check conflicts
+      with git merge-tree and read base-branch code with git show, never git merge
+      or git checkout in that tree.
       Write the full review report to {{output:report.md}}.
     outputs: [report.md]
