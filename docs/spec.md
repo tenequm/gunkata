@@ -92,7 +92,7 @@ A job without `prompt` is a deterministic job: no agent, no model, just steps an
 evidence.
 
 Failure parks the job, and nothing that needs it ever runs. There is no retry in v1;
-retry arrives only with transcript-based failure classification (principle 4).
+retry arrives only with transcript-based failure classification (principle 2).
 
 ## Steps
 
@@ -128,8 +128,8 @@ credential-free operation.
 2. Validate: unresolved profile/need/param/artifact references, malformed steps, and
    cycles are rejected before anything runs.
 3. Execute: roots start; each verified job releases its dependents.
-4. Every run is fully isolated: own directories, ports, HOMEs; teardown kills the whole
-   process tree.
+4. Every job gets its own directories and its executor its own HOME; teardown kills the
+   whole process tree.
 
 The run dir holds `record.json` (the verdict), `gunkata.log` (the engine's log, JSON
 lines; the same events go to stderr as text), and per job under `jobs/<job>/`:
@@ -153,21 +153,16 @@ Held here in quarantine until each proves its keep:
 1. **Completion is verified, never claimed.** A finished executor is not a finished job -
    an agent that did nothing terminates exactly like one that did the work. Only the
    declared checks passing completes a job; "the step ran" is not an outcome.
-2. **Evidence is files and exit codes.** The engine gates on artifacts on disk, never on
-   a stream, a status field, or an agent's say-so. Transcripts are kept for failure
-   classification, not as proof of correctness.
-3. **Zero process-global state.** Every run gets its own directories, ports and HOMEs;
-   nothing is shared between runs.
-4. **No retry without classification.** Quota, timeout, refusal and real defect want
+2. **No retry without classification.** Quota, timeout, refusal and real defect want
    opposite responses, so blind retry turns one failure into an expensive one. An
    unclassified failure parks: visible, terminal, never released past.
-5. **A run ends when its process tree is dead.** Teardown is part of the run contract;
+3. **A run ends when its process tree is dead.** Teardown is part of the run contract;
    the engine owns the full tree via process groups.
 
 ## Deliberately absent
 
 No templating, includes, extends, or expression language - repetitive katas are generated
-by a real program; the file stays dumb. No string outputs between jobs - files only. No
-shell in any declared command. No secrets in the file - executor auth inherits from the
-environment, MCP keys ride `${VAR}`. Matrix, workspace provisioning, retry, allow_failure,
-and concurrency knobs stay out until a real kata demands them.
+by a real program; the file stays dumb. No shell in any declared command. No secrets in
+the file - executor auth inherits from the environment, MCP keys ride `${VAR}`. Matrix,
+workspace provisioning, retry, allow_failure, and concurrency knobs stay out until a real
+kata demands them.

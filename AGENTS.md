@@ -29,8 +29,8 @@ credentials and auth. Every addition is explicitly specified by the step that ne
 
 ## Principles
 
-The engine's design principles - verified completion, file evidence, per-run isolation,
-park-not-retry, process-tree teardown - live in `docs/spec.md` under Principles.
+The engine's design principles - verified completion, park-not-retry, process-tree
+teardown - live in `docs/spec.md` under Principles.
 
 One rule lives here: engine tests never involve a model - acpx is a stub on PATH.
 
