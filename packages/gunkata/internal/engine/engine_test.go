@@ -83,6 +83,16 @@ case "$action" in
     rm "$token"
     printf 'refreshed\n' > "$token"
     ;;
+  refresh|clear) # Claude Code's login write: a temp file renamed over the link
+    login="$HOME/.claude/.credentials.json"
+    expiry=2000
+    if [[ "$action" == clear ]]; then expiry=0; fi
+    printf 'hello\n' > "$target"
+    printf '{"claudeAiOauth":{"expiresAt":%s}}\n' "$expiry" > "$login.tmp.1"
+    mv "$login.tmp.1" "$login"
+    for _ in $(seq 100); do [[ -L "$login" ]] && break; sleep 0.05; done
+    readlink "$login" > "$HOME/relinked.txt"
+    ;;
   fail)   exit 3 ;;
   hang)
     sleep 600 &
@@ -538,6 +548,54 @@ workflow:
 
 	if readFile(t, filepath.Join(realHome, token)) != "x" {
 		t.Error("the executor wrote through to the real token")
+	}
+}
+
+// TestRunReturnsClaudeLogin holds that a login Claude Code refreshes in its
+// link's place reaches the host while the executor still runs, and the link
+// comes back; a login it cleared as dead never overwrites the host's.
+func TestRunReturnsClaudeLogin(t *testing.T) {
+	const hostLogin = `{"claudeAiOauth":{"expiresAt":1000}}`
+
+	for action, want := range map[string]string{
+		"refresh": `{"claudeAiOauth":{"expiresAt":2000}}` + newline,
+		"clear":   hostLogin,
+	} {
+		t.Run(action, func(t *testing.T) {
+			stubACPX(t)
+
+			realHome := t.TempDir()
+			t.Setenv("HOME", realHome)
+
+			login := filepath.Join(realHome, claudeLogin)
+			writeFile(t, login, hostLogin)
+
+			res := mustRun(t, `
+name: stub-login
+agents:
+  stub: {harness: claude, model: stub-model, timeout_seconds: 7}
+workflow:
+  produce:
+    agent: stub
+    prompt: |
+      ACTION=`+action+`
+      TARGET={{output:out.txt}}
+    outputs: [out.txt]
+`, nil)
+
+			home := filepath.Join(res.RunDir, jobsDir, "produce", homeDir)
+			if got := readFile(t, filepath.Join(home, "relinked.txt")); got != login+newline {
+				t.Errorf("login link during the run = %q, want %q", got, login)
+			}
+
+			if got := readFile(t, login); got != want {
+				t.Errorf("host login = %q, want %q", got, want)
+			}
+
+			if exists(filepath.Join(home, claudeLogin)) {
+				t.Error("the login outlived the executor in the run dir")
+			}
+		})
 	}
 }
 

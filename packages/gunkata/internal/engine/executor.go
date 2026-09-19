@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -34,6 +35,14 @@ const (
 	harnessClaude = "claude"
 	harnessAgy    = "agy"
 	harnessCodex  = "codex"
+	// claudeLogin is Claude Code's subscription login under a HOME.
+	claudeLogin = ".claude/.credentials.json"
+	// loginPoll is how often a claude executor's login link is checked for
+	// a refresh that replaced it.
+	loginPoll = time.Second
+	// relinkSuffix names the link staged to restore a replaced one.
+	relinkSuffix = ".relink"
+	noExpiry     = 0
 	// waitDelay bounds the wait after a kill, so no run hangs on teardown.
 	waitDelay = 5 * time.Second
 	exitOK    = 0
@@ -89,7 +98,7 @@ var inherited = []string{
 // inheritance the executor contract allows, as paths that hold the same place
 // under the real home and under the executor's.
 var harnessAuth = map[string][]string{
-	harnessClaude: {".claude/.credentials.json"},
+	harnessClaude: {claudeLogin},
 	harnessCodex:  {".codex/auth.json"},
 	// pi reads its provider list, and the key with it, from this one file.
 	"pi": {".pi/agent/models.json"},
@@ -193,6 +202,9 @@ func runExecutor(ctx context.Context, spec execSpec) (int, error) {
 	if prepErr := prepareHome(spec); prepErr != nil {
 		return noExit, prepErr
 	}
+
+	stopLoginWatch := watchClaudeLogin(spec)
+	defer stopLoginWatch()
 
 	spec.npmCache, err = sharedNPMCache()
 	if err != nil {
@@ -597,6 +609,158 @@ func dropCredentials(spec execSpec) {
 			spec.log.Error("credential left in the run dir", keyErr, err)
 		}
 	}
+}
+
+// watchClaudeLogin hands every token a claude executor refreshes back to the
+// host while it runs, and once more when the returned func stops it. Claude
+// Code writes its login by temp file and rename, so a refresh replaces the
+// link with a file whose refresh token has rotated: the host's is spent, and
+// dropping that file would log the host out.
+func watchClaudeLogin(spec execSpec) func() {
+	realHome, err := os.UserHomeDir()
+	if spec.harness != harnessClaude || err != nil {
+		return func() {}
+	}
+
+	host := filepath.Join(realHome, claudeLogin)
+	job := filepath.Join(spec.home, claudeLogin)
+	done := make(chan struct{})
+
+	var watch sync.WaitGroup
+
+	watch.Go(func() { pollLogin(host, job, spec.log, done) })
+
+	return func() {
+		close(done)
+		watch.Wait()
+		returnLogin(host, job, spec.log)
+	}
+}
+
+func pollLogin(host, job string, log *slog.Logger, done <-chan struct{}) {
+	ticker := time.NewTicker(loginPoll)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			returnLogin(host, job, log)
+		}
+	}
+}
+
+func returnLogin(host, job string, log *slog.Logger) {
+	if err := syncLogin(host, job); err != nil {
+		log.Error("claude login not returned to the host", keyErr, err)
+	}
+}
+
+// syncLogin, once the executor has replaced its link to host with a file,
+// writes that file over the host's login if its token expires later - a
+// login Claude Code cleared as dead expires at 0, so it never does - then
+// restores the link, so the executor reads what the host holds from then on.
+func syncLogin(host, job string) error {
+	info, err := os.Lstat(job)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil //nolint:nilerr // still the link, or never linked
+	}
+
+	if err := keepNewerLogin(host, job); err != nil {
+		return err
+	}
+
+	return relink(host, job)
+}
+
+// keepNewerLogin writes job's login over host's if it expires later.
+func keepNewerLogin(host, job string) error {
+	refreshed, err := os.ReadFile(job)
+	if err != nil {
+		return fmt.Errorf("read refreshed login: %w", err)
+	}
+
+	target, err := filepath.EvalSymlinks(host)
+	if err != nil {
+		return fmt.Errorf("resolve host login: %w", err)
+	}
+
+	current, err := os.ReadFile(target)
+	if err != nil {
+		return fmt.Errorf("read host login: %w", err)
+	}
+
+	if loginExpiry(refreshed) <= loginExpiry(current) {
+		return nil
+	}
+
+	return replaceFile(target, refreshed)
+}
+
+// claudeLogin* mirror the one field of Claude Code's login file the engine
+// reads; the tokens themselves stay opaque.
+type (
+	claudeLoginFile struct {
+		OAuth claudeOAuth `json:"claudeAiOauth"`
+	}
+	claudeOAuth struct {
+		ExpiresAt int64 `json:"expiresAt"`
+	}
+)
+
+// loginExpiry is when a Claude Code login's access token expires, in unix
+// ms; noExpiry when there is none to read.
+func loginExpiry(raw []byte) int64 {
+	var login claudeLoginFile
+	if json.Unmarshal(raw, &login) != nil {
+		return noExpiry
+	}
+
+	return login.OAuth.ExpiresAt
+}
+
+// replaceFile writes raw over path atomically, owner-only.
+func replaceFile(path string, raw []byte) error {
+	dir, base := filepath.Split(path)
+
+	tmp, err := os.CreateTemp(dir, base+".gunkata-*")
+	if err != nil {
+		return fmt.Errorf("create login temp file: %w", err)
+	}
+
+	if err := writeAndClose(tmp, raw); err != nil {
+		_ = os.Remove(tmp.Name())
+
+		return err
+	}
+
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
+
+		return fmt.Errorf("return login to the host: %w", err)
+	}
+
+	return nil
+}
+
+// relink puts the link to src back at dst in one rename, so a reader never
+// finds dst missing.
+func relink(src, dst string) error {
+	staged := dst + relinkSuffix
+	_ = os.Remove(staged)
+
+	if err := os.Symlink(src, staged); err != nil {
+		return fmt.Errorf("stage credential link: %w", err)
+	}
+
+	if err := os.Rename(staged, dst); err != nil {
+		_ = os.Remove(staged)
+
+		return fmt.Errorf("restore credential link: %w", err)
+	}
+
+	return nil
 }
 
 // dropCredential removes path and its siblings named path.*, the temp files
