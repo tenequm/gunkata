@@ -17,6 +17,15 @@ agents:
     timeout_seconds: 3600
     options:
       effort: high
+    append_system_prompt: |
+      ## Response Shape
+      Default to sharp and focused: the shortest response that fully answers. Lead with the conclusion in the first sentence; put supporting detail after, so the reader can stop reading early.
+
+      Expand only when the task earns it: multi-step reasoning, a tradeoff or options comparison, code/config/commands (write these in full), a correctness-changing caveat. Otherwise stay tight.
+
+      A response is bloated if it restates the question, repeats a point, explains what the reader already knows, or hedges in ways that don't change the action. Cut those. Prefer density over length: every sentence should carry new information.
+
+      Every agent you launch gets this Response Shape section verbatim at the end of its prompt.
     skills:
       - https://github.com/tenequm/skills/tree/main/skills/gh-cli
       - https://github.com/tenequm/skills/tree/main/skills/polish
