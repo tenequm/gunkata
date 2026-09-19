@@ -534,6 +534,58 @@ parked agy run in that batch exposed
 [a tool completion arriving after the final message](/findings/tool-completions-can-arrive-after-the-final-message.md),
 fixed in `3ac4917`.
 
+# Proposals awaiting review
+
+Three changes that the measurements argue for and nobody has approved yet. Each one names
+what would falsify it, because each can cost more than it returns.
+
+## Proof and disposition in the review kata (measured, one run pending)
+
+Two prompt additions to `katas/review.kata.yml`:
+
+- Prove each correctness finding with a test that fails at the PR head and passes at the
+  merge base, run it, report the outcome, delete it. A finding whose test does not fail as
+  predicted is reported as unproven with what was tried, never dropped in silence. Changes
+  that cannot be tested that way say so and why.
+- End with a disposition table: one row per finding any agent raised, including the ones
+  inside cleared or checked sections, resolved as kept, merged, dropped with a reason, or
+  cleared with verified evidence. Rows must account for every agent finding.
+
+Both come from review-2c, the only run that produced them: it proved K1 with a test failing
+3/3 at the head and passing at the merge base, and was the only report whose disposition
+table covered all 29 lens findings.[^judge3]
+
+The risk is real in both directions. Writing tests costs wall time, and review-2c's report
+job took 755 s. Worse, a reviewer under a proof rule can quietly downgrade a true finding it
+cannot reproduce quickly, which is the same failure as a fabricated clearance with better
+manners. What would falsify the change: key-item or recurring recall below the terse
+baseline of 6/6 keys, core-7 6/7 and 4/7, recurring 16 and 14 at 992-1125 s,[^judge3] or
+findings appearing as unproven that earlier runs reported outright.
+
+## Machine-verifiable Checked sections (not built)
+
+A lens claiming coverage should be checkable against its own stream. `jobs/<job>/executor.jsonl`
+records every file an executor opened and every command it ran; comparing that with
+`changed-files.txt` and failing the job on a coverage claim the stream contradicts costs one
+script and under a second per job, no model tokens. Two sonnet runs and two agy runs asserted
+they had read every changed file while the stream shows 2 to 7 of 18 to 20 opened; this gate
+catches exactly that class.[^lensab][^lensx] It proves a file was opened, not that it was read
+with attention, and the kata spec has no placeholder for a job's own stream, so a post-step
+reaches it by relative path until the engine grows one.
+
+## Escalation the static DAG cannot express (not built)
+
+The job-based review is one static pass: prepare, four lenses, one report. The polish-new
+skill converges instead - after validating findings it launches a skeptic per correctness
+finding to refute it, a dive per confirmed mechanism to find siblings, and a dive per
+unresolved suspicion, feeding the results back until a round finds nothing new, with every
+finder required to end on a non-empty "Unresolved suspicions" section.[^polishnew] None of
+that is expressible in a kata today, because the DAG is fixed at load time and no job can
+fan out from what it found. That, rather than prompt wording, is the likeliest reason the
+DAG line clears findings the single-lead runs keep: no skeptic ever attacked a clearance.
+Runtime fan-out is an engine feature, and the first one to build if the DAG is to beat one
+agent with subagents.
+
 [^pr]: https://github.com/glim-sh/cuttle/pull/73
 [^runs]: the kata run dirs on ws-pond-01
 [^session]: the session-path transcripts, indexed in pond
@@ -553,3 +605,4 @@ fixed in `3ac4917`.
 [^judge3]: blind judge 3, scratchpad/judge3/scores.md; reports anonymized as Y1-Y5
 [^lensab]: the sonnet/opus cleanliness-lens A/B, scratchpad/lensab/notes.md
 [^lensx]: the codex and agy cleanliness-lens runs
+[^polishnew]: https://github.com/tenequm/skills/blob/main/skills/polish-new/SKILL.md
