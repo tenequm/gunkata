@@ -87,12 +87,19 @@ const (
 	xdgCacheDir  = ".cache"
 )
 
-// npmCacheDir is the engine-owned npm cache under the host's cache dir.
-// acpx 0.17 runs the claude and codex adapters through npm exec, which
-// would otherwise download and install hundreds of MB into each bare HOME.
-// It holds package code, never config, and is no new write capability: an
-// executor runs as the engine's uid on an unsandboxed filesystem.
-const npmCacheDir = "gunkata/npm"
+// sharedCaches maps each tool cache variable to its engine-owned dir under
+// the host's cache dir, shared by every executor. acpx 0.17 runs the claude
+// and codex adapters through npm exec, and a Go repo's checks fill the build,
+// module and lint caches: hundreds of MB into each bare HOME otherwise. Each
+// tool keeps its cache safe for concurrent use. They hold package code and
+// build output, never config, and are no new write capability: an executor
+// runs as the engine's uid on an unsandboxed filesystem.
+var sharedCaches = map[string]string{
+	"npm_config_cache":    "gunkata/npm",
+	"GOCACHE":             "gunkata/go-build",
+	"GOMODCACHE":          "gunkata/go-mod",
+	"GOLANGCI_LINT_CACHE": "gunkata/golangci-lint",
+}
 
 // inherited is the whitelist that crosses the executor boundary. Skills,
 // agent instruction files, MCP config and everything else stay outside. On
@@ -201,7 +208,7 @@ type execSpec struct {
 	jobDir  string // holds the executor's stream and stderr
 	// privateTmp mounts home/tmp over the executor's /tmp.
 	privateTmp bool
-	npmCache   string
+	caches     []string // VAR=dir entries
 	log        *slog.Logger
 }
 
@@ -227,7 +234,7 @@ func runExecutor(
 	stopLoginWatch := watchClaudeLogin(spec)
 	defer stopLoginWatch()
 
-	spec.npmCache, err = sharedNPMCache()
+	spec.caches, err = makeSharedCaches()
 	if err != nil {
 		return noExit, nil, err
 	}
@@ -353,7 +360,7 @@ func executorCmd(
 	//nolint:gosec // G204: bin is acpx on PATH; the args are the kata's
 	cmd := exec.CommandContext(ctx, bin, acpxArgs(spec, mcpFlags)...)
 	cmd.Dir = spec.work
-	cmd.Env = append(executorEnv(spec.home, spec.npmCache),
+	cmd.Env = append(executorEnv(spec.home, spec.caches),
 		harnessEnv[spec.harness]...)
 
 	if mcpConfig != nil {
@@ -615,12 +622,11 @@ func expandMCP(raw string) (string, error) {
 }
 
 // executorEnv is the whole environment an executor gets: the whitelist, plus
-// the engine-owned home and the paths that hang off it, and the shared npm
-// cache.
-func executorEnv(home, npmCache string) []string {
+// the engine-owned home and the paths that hang off it, and the shared tool
+// caches.
+func executorEnv(home string, caches []string) []string {
 	env := []string{
 		"HOME=" + home,
-		"npm_config_cache=" + npmCache,
 		"TERM=dumb",
 		"TMPDIR=" + filepath.Join(home, tmpDir),
 		"XDG_CONFIG_HOME=" + filepath.Join(home, xdgConfigDir),
@@ -628,6 +634,8 @@ func executorEnv(home, npmCache string) []string {
 		"XDG_STATE_HOME=" + filepath.Join(home, xdgStateDir),
 		"XDG_CACHE_HOME=" + filepath.Join(home, xdgCacheDir),
 	}
+
+	env = append(env, caches...)
 
 	for _, key := range inherited {
 		if value, ok := os.LookupEnv(key); ok {
@@ -638,21 +646,26 @@ func executorEnv(home, npmCache string) []string {
 	return env
 }
 
-// sharedNPMCache creates the npm cache every executor shares. npm keeps it
-// safe for concurrent use: content-addressed writes, and a lock around each
-// npm exec install.
-func sharedNPMCache() (string, error) {
+// makeSharedCaches creates the caches every executor shares and returns them
+// as environment entries.
+func makeSharedCaches() ([]string, error) {
 	cache, err := os.UserCacheDir()
 	if err != nil {
-		return unset, fmt.Errorf("resolve cache dir: %w", err)
+		return nil, fmt.Errorf("resolve cache dir: %w", err)
 	}
 
-	dir := filepath.Join(cache, npmCacheDir)
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
-		return unset, fmt.Errorf("create npm cache: %w", err)
+	env := make([]string, emptyLen, len(sharedCaches))
+
+	for key, rel := range sharedCaches {
+		dir := filepath.Join(cache, rel)
+		if err := os.MkdirAll(dir, dirPerm); err != nil {
+			return nil, fmt.Errorf("create %s: %w", key, err)
+		}
+
+		env = append(env, key+"="+dir)
 	}
 
-	return dir, nil
+	return env, nil
 }
 
 // prepareHome builds the executor's directories, links in the credentials
