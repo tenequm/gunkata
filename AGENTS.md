@@ -76,3 +76,23 @@ bare exit 127.
 
 `nix develop` provides the pinned toolchain plus pond; acpx and the executor CLIs are
 host-provided and the shell reports their versions on entry.
+
+## Quota ceiling for live runs
+
+Every executor run and every subagent bills the same Claude subscription, whose binding
+limit is a rolling 5-hour window. One window is worth roughly 120 Opus executor-minutes:
+an Opus executor costs about 0.65% of a window per minute whatever the kata does, so a
+`review` run is about 10% of a window and a `review-2c` run about 25%. A run that hits the
+limit parks and returns nothing, having spent everything it already used. The measurements
+behind these numbers are in `/docs/knowledge/references/2609-19-cuttle-pr73-review-forensics.md`.
+
+- At most 2 executor runs at once, and a multi-job kata counts as both.
+- At most 2 analysis subagents at once, and never while 2 executors run.
+- Replication caps per window: 3 runs on Opus, 5 on Sonnet. Calibration and A/B work runs
+  on Sonnet unless a result demands Opus.
+- Read the window gauge before a batch, never after: cost data only exists afterwards. Stop
+  launching executors at 60%, launch nothing longer than ten minutes above 75%, and above
+  90% run the orchestrator only.
+- Never leave an executor running unwatched past its expected duration, and never read
+  transcripts, run logs or large files in the orchestrating session: delegate that, or
+  aggregate in the shell and return numbers.
