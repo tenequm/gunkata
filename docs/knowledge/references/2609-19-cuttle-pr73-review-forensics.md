@@ -539,7 +539,7 @@ fixed in `3ac4917`.
 Three changes that the measurements argue for and nobody has approved yet. Each one names
 what would falsify it, because each can cost more than it returns.
 
-## Proof and disposition in the review kata (measured, one run pending)
+## Proof and disposition in the review kata (measured, rejected)
 
 Two prompt additions to `katas/review.kata.yml`:
 
@@ -562,6 +562,25 @@ manners. What would falsify the change: key-item or recurring recall below the t
 baseline of 6/6 keys, core-7 6/7 and 4/7, recurring 16 and 14 at 992-1125 s,[^judge3] or
 findings appearing as unproven that earlier runs reported outright.
 
+First run, 20260919T162716Zd03a, 1445 s: both falsifiers fired.[^judge3] K2 came out the
+strongest instance of any run - the failed-capture gate as the top blocking finding, proven
+by a test failing at the head and passing at the merge base - and the disposition table was
+the most complete of the six, with merges declared from both sides, one uncounted note
+aside. But K1 was missed and actively cleared ("idleTimers/idleDeadlines are cleared
+together on every reachable path", which is false on the pool-mode removal path), core-7
+fell to 4/7, and the dropSeed ordering item was demoted to "reported as unproven" where
+three earlier reports state it outright. Proof discipline grades findings, not clearances,
+so it does not close the hole that loses K1.
+
+The second run, 20260919T230839Zba55, 1274 s, repeated it: K1 missed again, core-7 5/7,
+recurring 15 of 25, one merge item marked unproven.[^judge3] Two of two proof runs miss K1
+where the terse baseline hits it two of two, at a cost of $13.56 and $18.84. The rule is
+rejected and `katas/review.kata.yml` keeps its terse default unchanged. The disposition table
+is the half worth salvaging - both proof runs produced the most complete accounting of raw
+lens findings seen, and review-3 reconciled 71 raw findings into 42 without a proof rule at
+all - so an accounting requirement without a testing requirement is the version to try if
+this returns.
+
 ## Machine-verifiable Checked sections (not built)
 
 A lens claiming coverage should be checkable against its own stream. `jobs/<job>/executor.jsonl`
@@ -573,18 +592,56 @@ catches exactly that class.[^lensab][^lensx] It proves a file was opened, not th
 with attention, and the kata spec has no placeholder for a job's own stream, so a post-step
 reaches it by relative path until the engine grows one.
 
-## Escalation the static DAG cannot express (not built)
+## Escalation the static DAG cannot express (built, first run parked)
 
 The job-based review is one static pass: prepare, four lenses, one report. The polish-new
 skill converges instead - after validating findings it launches a skeptic per correctness
 finding to refute it, a dive per confirmed mechanism to find siblings, and a dive per
 unresolved suspicion, feeding the results back until a round finds nothing new, with every
 finder required to end on a non-empty "Unresolved suspicions" section.[^polishnew] None of
-that is expressible in a kata today, because the DAG is fixed at load time and no job can
-fan out from what it found. That, rather than prompt wording, is the likeliest reason the
-DAG line clears findings the single-lead runs keep: no skeptic ever attacked a clearance.
-Runtime fan-out is an engine feature, and the first one to build if the DAG is to beat one
-agent with subagents.
+that was expressible in a kata, because the DAG was fixed at load time and no job could fan
+out from what it found. That, rather than prompt wording, is the likeliest reason the DAG
+line clears findings the single-lead runs keep: no skeptic ever attacked a clearance.
+
+Runtime fan-out was built as PR #5: one job key, `fan-out: {items, job, max_rounds,
+max_items}`, makes a job a round head whose items directory schedules N copies of a template
+job, each reading its own brief through `{{item}}`, the loop ending on a round that emits
+nothing or at `max_rounds`. One spec promise moved with it: the DAG is no longer fully known
+at load time. `katas/review-3.kata.yml` is review-2c plus that loop.
+
+The mechanism worked on its first live run, `20260919T174005Z92da`: `escalate/round-1` took
+910 s and wrote nine briefs - six skeptics and three dives, among them
+`skeptic-pool-queued-reap-kills-relaunch`, which names the exact mechanism of the key finding
+this line has missed in four of five runs - and the engine ran nine `probe` instances in
+parallel, keyed `probe/round-1/item-N`, each with its own job dir, HOME and output check.
+
+The run still returned nothing. Eight probes finished in 463-1866 s; the ninth slept through
+its budget and hit the 3600 s timeout, which parked the head, ended the loop and left
+`report` unrun. The run metered $86.00 and truly cost about $145 once the parked hour, which
+emits no `turn end`, is priced in. There is no report to judge, so the loop's effect on
+recall is still unmeasured. What the run did establish is a design gap, recorded in
+[a parked fan-out item throws away the whole round](/findings/a-parked-fan-out-item-throws-away-the-whole-round.md):
+a round is sampled work, and one instance failing should be an outcome the next head reads,
+not a dependency failure that discards the round.
+
+Attempt 2 ran that fix plus a budget trim - a 900 s probe timeout, `max_items: 6`,
+`max_rounds: 2`, and a probe prompt that names the four tools a brief may be settled with and
+forbids browsers, daemons and `sleep` outright. Run `20260919T233053Z5dee` succeeded in
+5141 s for $82.31 metered, against $145 for the attempt that returned nothing: two rounds of
+six and five items, eleven probes, none parked, longest job the report at 1091 s. The loop
+stopped at `max_rounds` with `capped: true` while round 2 was still emitting five briefs, so
+it was cut off rather than converged; whatever the report scores is a floor for the shape.
+The parked-instance tolerance was therefore insurance that no probe needed: the trim is what
+saved the run.
+
+Blind-judged, that report is the best of the eight scored on this PR: all three key items,
+core-7 6/7, and 18 of the 25 recurring items - higher than the five-run session baseline
+(16.5) and the terse kata (16 and 14). It hit K1 with the most honest evidence of any report,
+stating that natural timing did not reproduce and that the window had to be widened with a
+slow `running()` call, and it reconciled 71 raw lens findings into 42 numbered ones. Its one
+core-7 miss is the lease re-check, which four weaker reports found. So the convergence loop
+is the first job-based shape to beat a single lead with subagents, on one run, cut off at
+`max_rounds` rather than converged.
 
 # What a run costs against the subscription window
 
