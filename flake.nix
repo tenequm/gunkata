@@ -13,19 +13,19 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      pondVersion = "0.17.3";
+      pondVersion = "0.18.0";
       pondAssets = {
         x86_64-linux = {
           target = "x86_64-unknown-linux-gnu";
-          hash = "sha256-wPVEc+lzUuLNRfPMiTyPlChNQXFobz3r5i5Kuw24eWU=";
+          hash = "sha256-r6JHUwnptf84ikyCIi2ssfYEtliSl2oaeznvSMxM7aQ=";
         };
         aarch64-linux = {
           target = "aarch64-unknown-linux-gnu";
-          hash = "sha256-cCHiJoNIq91EqJCc4WC4I8RSM5unprsKEvZ9rw0cxWs=";
+          hash = "sha256-koyagHn8nvy+eAkVxHpQUxtL8j4qg1Vk5npKrR6cJWc=";
         };
         aarch64-darwin = {
           target = "aarch64-apple-darwin";
-          hash = "sha256-uhnrhjMz6vcOi1hM5qIPXc9cn5lAUTs7qzyOHTBBzuM=";
+          hash = "sha256-S9XDqeEOQLd8JUQY3KlLa5m17YAfohILmodp1kGoXRg=";
         };
       };
 
