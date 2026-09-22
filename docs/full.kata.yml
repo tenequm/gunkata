@@ -11,8 +11,9 @@ agents:
   executor:
     harness: claude               # the acpx family that runs the job (claude, agy, ...)
     model: claude-opus-5
-    acp_adapter: "@agentclientprotocol/claude-agent-acp@0.79.0"   # optional: pins the ACP
-                                  # adapter package acpx runs via npx; absent = acpx's own
+    acp_adapter: "@agentclientprotocol/claude-agent-acp@0.81.0"   # optional: pins the ACP
+                                  # adapter package acpx runs via npx; absent = the engine's
+                                  # default for claude, acpx's own otherwise
     # optional, claude only: appended to the agent's own system prompt;
     # placeholders expand here as in prompt
     append_system_prompt: |

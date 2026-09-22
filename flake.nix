@@ -13,6 +13,38 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
+      # acpx publishes a prebuilt dist/ to npm, but its repo builds with pnpm and a
+      # large dev toolchain, so the tarball is packaged with a runtime-only lockfile.
+      # To bump: set acpxVersion and acpxHash, then regenerate the lockfile from the
+      # tarball's package/ dir and set npmDepsHash to lib.fakeHash once:
+      #   jq 'del(.devDependencies, .scripts)' package.json > p && mv p package.json
+      #   npm install --package-lock-only --ignore-scripts
+      acpxVersion = "0.19.1";
+      acpxHash = "sha256-+Z106BCFEhVjyRf0UJdY+3i/H6MEJORpGTwJg3WSu/A=";
+
+      mkAcpx =
+        pkgs:
+        pkgs.buildNpmPackage {
+          pname = "acpx";
+          version = acpxVersion;
+          src = pkgs.fetchurl {
+            url = "https://registry.npmjs.org/acpx/-/acpx-${acpxVersion}.tgz";
+            hash = acpxHash;
+          };
+          postPatch = ''
+            ${pkgs.lib.getExe pkgs.jq} 'del(.devDependencies, .scripts)' package.json > package.json.new
+            mv package.json.new package.json
+            cp ${./nix/acpx-package-lock.json} package-lock.json
+          '';
+          npmDepsHash = "sha256-EmjjBR0RKfINF+Biidu3UnM/aAyLNz3KSReS6SC+TYE=";
+          dontNpmBuild = true;
+          meta = {
+            description = "Headless CLI client for the Agent Client Protocol";
+            homepage = "https://github.com/openclaw/acpx";
+            mainProgram = "acpx";
+          };
+        };
+
       pondVersion = "0.18.0";
       pondAssets = {
         x86_64-linux = {
@@ -70,6 +102,7 @@
     in
     {
       packages = forAllSystems (pkgs: rec {
+        acpx = mkAcpx pkgs;
         pond = mkPond pkgs;
         default = pond;
       });
@@ -79,6 +112,7 @@
           name = "gunkata";
 
           packages = [
+            (mkAcpx pkgs)
             pkgs.actionlint
             pkgs.gitleaks
             pkgs.go_1_27
@@ -91,16 +125,13 @@
             (mkPond pkgs)
           ];
 
-          # acpx and the executor CLIs are host-provided on purpose: acpx ships as an npm
-          # package built with pnpm, and an executor's ACP server is installed by the
-          # executor's own vendor and cannot be fetched reproducibly. See
-          # docs/knowledge/findings/runtime-deps-not-yet-flake-pinned.md
+          # The executor CLIs are host-provided on purpose: each is installed by its own
+          # vendor and cannot be fetched reproducibly.
           shellHook = ''
             gunkata_check() {
-              local name="$1" floor="$2" version
+              local name="$1" version
               if ! command -v "$name" >/dev/null 2>&1; then
-                printf '  %-8s MISSING   (host-provided%s)\n' "$name" \
-                  "''${floor:+, need >= $floor}"
+                printf '  %-8s MISSING   (host-provided)\n' "$name"
                 return
               fi
               version="$("$name" --version 2>/dev/null | head -n1)"
@@ -109,15 +140,15 @@
 
             echo "gunkata dev shell"
             echo "flake-pinned:"
+            printf '  %-8s %s\n' acpx "$(acpx --version 2>/dev/null | head -n1)"
             printf '  %-8s %s\n' go "$(go version | cut -d' ' -f3)"
             printf '  %-8s %s\n' pond "$(pond --version 2>/dev/null | head -n1)"
             printf '  %-8s %s\n' gitleaks "$(gitleaks version 2>/dev/null | head -n1)"
             printf '  %-8s %s\n' actionlint "$(actionlint --version 2>/dev/null | head -n1)"
             echo "host-provided:"
-            gunkata_check acpx 0.15.0
-            gunkata_check claude ""
-            gunkata_check codex ""
-            gunkata_check agy ""
+            gunkata_check claude
+            gunkata_check codex
+            gunkata_check agy
           '';
         };
       });

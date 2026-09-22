@@ -724,7 +724,7 @@ func assertArgv(t *testing.T, runDir, home string) {
 		"--approve-all",
 		"--format", "json", "--json-strict",
 		"--mcp-config", mcpStdin,
-		"claude", "exec",
+		agentFlag, npxRun + harnessAdapter[harnessClaude], "exec",
 		"--config-option", "a=b",
 		"--config-option", "reasoning_effort=high",
 	}
@@ -958,9 +958,10 @@ workflow:
 
 	const flag = "--json-strict\n--append-system-prompt\n"
 
+	agent := "\n" + agentFlag + "\n" + npxRun + harnessAdapter[harnessClaude] + "\nexec\n"
 	want := map[string]string{
-		"profile": flag + "Be terse.\nclaude\nexec\n",
-		"amended": flag + "Be terse.\n\nAnswer in haiku.\nclaude\nexec\n",
+		"profile": flag + "Be terse." + agent,
+		"amended": flag + "Be terse.\n\nAnswer in haiku." + agent,
 	}
 	for job, args := range want {
 		argv := readFile(t, filepath.Join(res.RunDir, jobsDir, job, homeDir, "argv.txt"))

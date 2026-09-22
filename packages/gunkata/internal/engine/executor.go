@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -88,8 +89,8 @@ const (
 )
 
 // sharedCaches maps each tool cache variable to its engine-owned dir under
-// the host's cache dir, shared by every executor. acpx 0.17 runs the claude
-// and codex adapters through npm exec, and a Go repo's checks fill the build,
+// the host's cache dir, shared by every executor. acpx runs the claude and
+// codex adapters through npm exec, and a Go repo's checks fill the build,
 // module and lint caches: hundreds of MB into each bare HOME otherwise. Each
 // tool keeps its cache safe for concurrent use. They hold package code and
 // build output, never config, and are no new write capability: an executor
@@ -128,10 +129,17 @@ var harnessAuth = map[string][]string{
 }
 
 // harnessAgent is the acpx agent argument for a harness acpx has no built-in
-// agent for; any other harness is acpx's positional agent name. acpx 0.17
-// lacks Antigravity, so agy runs the host's wrapper around its ACP server.
+// agent for; any other harness is acpx's positional agent name. agy runs the
+// host's wrapper around its ACP server, not acpx's built-in Antigravity agent.
 var harnessAgent = map[string][]string{
 	harnessAgy: {agentFlag, "agy-acp-server"},
+}
+
+// harnessAdapter is the adapter a harness runs when its profile pins none.
+// acpx's own claude range, ^0.76.0, stops short of the Claude Code builds
+// that know the newest models; 0.81.0 bundles 2.1.280, the first with Opus 5.5.
+var harnessAdapter = map[string]string{
+	harnessClaude: "@agentclientprotocol/claude-agent-acp@0.81.0",
 }
 
 // agentFlag names acpx's custom agent command; npxRun is how that command
@@ -546,11 +554,13 @@ func acpxArgs(spec execSpec, mcpFlags []string) []string {
 	return append(args, spec.prompt)
 }
 
-// acpxAgent is the acpx agent argument: a pinned adapter run through npx,
-// the harness's own agent command, or acpx's built-in agent by name.
+// acpxAgent is the acpx agent argument: a pinned or engine-default adapter
+// run through npx, the harness's own agent command, or acpx's built-in agent
+// by name.
 func acpxAgent(spec execSpec) []string {
-	if spec.adapter != unset {
-		return []string{agentFlag, npxRun + spec.adapter}
+	adapter := cmp.Or(spec.adapter, harnessAdapter[spec.harness])
+	if adapter != unset {
+		return []string{agentFlag, npxRun + adapter}
 	}
 
 	if agent, ok := harnessAgent[spec.harness]; ok {

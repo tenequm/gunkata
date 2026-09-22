@@ -47,12 +47,14 @@ A profile is the executor contract factored out: every executor starts bare - en
 HOME, nothing inherited but subscription auth - and every addition is declared.
 
 - `harness:` - the acpx agent that runs the job, e.g. `claude`. `agy` is Google
-  Antigravity, which acpx 0.17 lacks: it runs the host's `agy-acp-server` on PATH.
+  Antigravity: it runs the host's `agy-acp-server` on PATH, not acpx's built-in agent.
   `codex` starts in its adapter's full-access mode, as other harnesses run unsandboxed;
   `options: {mode: <mode>}` picks another.
 - `acp_adapter:` - pins the ACP adapter package acpx runs for the harness, as one npm
-  package spec, e.g. `@agentclientprotocol/claude-agent-acp@0.79.0`. Absent, acpx runs
-  its built-in adapter for the harness at the version range it pins. Set, the engine
+  package spec, e.g. `@agentclientprotocol/claude-agent-acp@0.81.0`. Absent, `claude`
+  runs the engine's default, `@agentclientprotocol/claude-agent-acp@0.81.0` - acpx's own
+  range stops at 0.76.x, which predates the newest Claude models - and any other
+  harness runs acpx's built-in adapter at the version range it pins. Set, the engine
   hands acpx `--agent "npx -y <spec>"` in place of the harness name; the harness's own
   bare setup, credentials and skills location still apply, and npx fetches through the
   engine's shared npm cache. The value is a package name with an optional `@<version>`

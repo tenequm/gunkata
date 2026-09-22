@@ -74,8 +74,9 @@ Run both from a shell that has the pinned toolchain, or prefix with `nix develop
 inherits the caller's environment, and one cached before a `flake.nix` change fails with a
 bare exit 127.
 
-`nix develop` provides the pinned toolchain plus pond; acpx and the executor CLIs are
-host-provided and the shell reports their versions on entry.
+`nix develop` provides the pinned toolchain plus pond and acpx; the executor CLIs are
+host-provided and the shell reports their versions on entry. Bumping acpx means also
+checking the engine's default claude adapter (`harnessAdapter` in `executor.go`).
 
 ## Quota ceiling for live runs
 
