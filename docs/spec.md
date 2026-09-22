@@ -44,7 +44,10 @@ Four top-level keys. Seven job keys. Unknown fields are rejected.
 ## Agents
 
 A profile is the executor contract factored out: every executor starts bare - engine-owned
-HOME, nothing inherited but subscription auth - and every addition is declared.
+HOME, nothing inherited but subscription auth - and every addition is declared. One
+exception: on macOS Claude Code keeps its login in the login Keychain, so a `claude`
+executor's HOME links `~/Library/Keychains`. That executor can reach every item in the
+Keychain, and a token refresh it loses to a concurrent one may clear the host's login.
 
 - `harness:` - the acpx agent that runs the job, e.g. `claude`. `agy` is Google
   Antigravity: it runs the host's `agy-acp-server` on PATH, not acpx's built-in agent.

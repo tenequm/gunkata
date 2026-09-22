@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,6 +43,9 @@ const (
 	harnessCodex  = "codex"
 	// claudeLogin is Claude Code's subscription login under a HOME.
 	claudeLogin = ".claude/.credentials.json"
+	// claudeKeychains holds Claude Code's login on macOS, which it keeps in
+	// the login Keychain; the security CLI finds that only under $HOME.
+	claudeKeychains = "Library/Keychains"
 	// claudeTranscripts matches Claude Code's main session transcripts under
 	// a HOME; subagents' sit deeper.
 	claudeTranscripts = ".claude/projects/*/*.jsonl"
@@ -89,8 +93,8 @@ const (
 )
 
 // sharedCaches maps each tool cache variable to its engine-owned dir under
-// the host's cache dir, shared by every executor. acpx runs the claude and
-// codex adapters through npm exec, and a Go repo's checks fill the build,
+// the host's cache dir, shared by every executor. The claude and codex
+// adapters run through npx, and a Go repo's checks fill the build,
 // module and lint caches: hundreds of MB into each bare HOME otherwise. Each
 // tool keeps its cache safe for concurrent use. They hold package code and
 // build output, never config, and are no new write capability: an executor
@@ -111,11 +115,23 @@ var inherited = []string{
 	"PATH", "LANG", "LC_ALL", "USER", "LOGNAME", "__NIXOS_SET_ENVIRONMENT_DONE",
 }
 
+// onMacOS is whether Claude Code keeps its login in the Keychain, which the
+// host and every executor share, instead of a file under each HOME.
+const onMacOS = runtime.GOOS == "darwin"
+
+func claudeAuth() string {
+	if onMacOS {
+		return claudeKeychains
+	}
+
+	return claudeLogin
+}
+
 // harnessAuth is the subscription credentials one harness inherits, the sole
 // inheritance the executor contract allows, as paths that hold the same place
 // under the real home and under the executor's.
 var harnessAuth = map[string][]string{
-	harnessClaude: {claudeLogin},
+	harnessClaude: {claudeAuth()},
 	harnessCodex:  {".codex/auth.json"},
 	// pi reads its provider list, and the key with it, from this one file.
 	"pi": {".pi/agent/models.json"},
@@ -128,9 +144,9 @@ var harnessAuth = map[string][]string{
 	},
 }
 
-// harnessAgent is the acpx agent argument for a harness acpx has no built-in
-// agent for; any other harness is acpx's positional agent name. agy runs the
-// host's wrapper around its ACP server, not acpx's built-in Antigravity agent.
+// harnessAgent is the acpx agent argument for a harness that runs the host's
+// own agent command instead of an acpx built-in; any other harness is acpx's
+// positional agent name. agy runs the host's wrapper around its ACP server.
 var harnessAgent = map[string][]string{
 	harnessAgy: {agentFlag, "agy-acp-server"},
 }
@@ -204,7 +220,7 @@ var githubAuth = []string{".config/gh", ".config/git", ".onecli"}
 // execSpec is one acpx invocation.
 type execSpec struct {
 	harness string
-	adapter string // npm package spec; unset keeps acpx's built-in
+	adapter string // npm package spec; unset takes harnessAdapter or acpx's
 	model   string
 	prompt  string
 	// appendSystemPrompt is appended to the agent's system prompt; unset
@@ -768,8 +784,16 @@ func credentialPaths(harness string) []string {
 // replacing the link with a regular file, via a temp file beside it. Nothing
 // secret may outlive the job in the run dir.
 func dropCredentials(spec execSpec) {
+	home, err := os.OpenRoot(spec.home)
+	if err != nil {
+		spec.log.Error("credential left in the run dir", keyErr, err)
+
+		return
+	}
+	defer home.Close()
+
 	for _, rel := range credentialPaths(spec.harness) {
-		if err := dropCredential(filepath.Join(spec.home, rel)); err != nil {
+		if err := dropCredential(home, rel); err != nil {
 			spec.log.Error("credential left in the run dir", keyErr, err)
 		}
 	}
@@ -779,10 +803,10 @@ func dropCredentials(spec execSpec) {
 // host while it runs, and once more when the returned func stops it. Claude
 // Code writes its login by temp file and rename, so a refresh replaces the
 // link with a file whose refresh token has rotated: the host's is spent, and
-// dropping that file would log the host out.
+// dropping that file would log the host out. The Keychain needs none of it.
 func watchClaudeLogin(spec execSpec) func() {
 	realHome, err := os.UserHomeDir()
-	if spec.harness != harnessClaude || err != nil {
+	if spec.harness != harnessClaude || onMacOS || err != nil {
 		return func() {}
 	}
 
@@ -1027,12 +1051,14 @@ func relink(src, dst string) error {
 	return nil
 }
 
-// dropCredential removes path and its siblings named path.*, the temp files
-// an atomic rewrite leaves when it is cut short.
-func dropCredential(path string) error {
-	dir, base := filepath.Split(path)
+// dropCredential removes rel and its siblings named rel.*, the temp files an
+// atomic rewrite leaves when it is cut short. It stays inside home, so an
+// executor that swaps a parent dir for a link to a host dir cannot aim it
+// there.
+func dropCredential(home *os.Root, rel string) error {
+	dir, base := filepath.Split(rel)
 
-	entries, err := os.ReadDir(dir)
+	entries, err := fs.ReadDir(home.FS(), filepath.Clean(dir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -1046,7 +1072,7 @@ func dropCredential(path string) error {
 			continue
 		}
 
-		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+		if err := home.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
 			return fmt.Errorf("remove credential: %w", err)
 		}
 	}

@@ -109,6 +109,11 @@ case "$action" in
     for _ in $(seq 100); do [[ -L "$login" ]] && break; sleep 0.05; done
     readlink "$login" > "$HOME/relinked.txt"
     ;;
+  swap)   # a credential's parent dir swapped for a link to a host dir
+    printf 'hello\n' > "$target"
+    rm -rf "$HOME/.config"
+    ln -s "$origin" "$HOME/.config"
+    ;;
   scratch) # an agent that ignores TMPDIR
     printf 'scratch\n' > "/tmp/$(field SCRATCH)"
     ls /tmp > "$target"
@@ -198,7 +203,9 @@ func stubACPX(t *testing.T) {
 
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GUNKATA_POISON", "must-not-cross")
-	// The shared tool caches land here, never in the host's.
+	// The shared tool caches land in these, never in the host's: macOS takes
+	// the cache dir from HOME, Linux from XDG_CACHE_HOME.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 }
 
@@ -542,7 +549,7 @@ func TestRunStartsTheExecutorBare(t *testing.T) {
 	t.Setenv("HOME", realHome)
 	t.Setenv(mcpVarName, mcpSecret)
 
-	for _, rel := range []string{".claude/.credentials.json", ".config/gh/hosts.yml", ".codex/auth.json", ".claude/settings.json"} {
+	for _, rel := range []string{claudeAuth(), ".config/gh/hosts.yml", ".codex/auth.json", ".claude/settings.json"} {
 		writeFile(t, filepath.Join(realHome, rel), "x")
 	}
 
@@ -577,7 +584,7 @@ workflow:
 
 	assertArgv(t, res.RunDir, home)
 	assertExecutorEnv(t, home)
-	assertLinks(t, realHome, home, ".claude/.credentials.json", ".config/gh")
+	assertLinks(t, realHome, home, claudeAuth(), ".config/gh")
 
 	if readFile(t, filepath.Join(home, ".claude", "skills", "local-skill", "SKILL.md")) != "skill" {
 		t.Error("the declared skill was not materialized")
@@ -659,12 +666,44 @@ workflow:
 	}
 }
 
+// TestRunKeepsCleanupInTheJobHome holds that an executor which swaps a
+// credential's parent dir for a link to a host dir cannot aim the engine's
+// credential cleanup there.
+func TestRunKeepsCleanupInTheJobHome(t *testing.T) {
+	stubACPX(t)
+
+	decoy := t.TempDir()
+	hosts := writeFile(t, filepath.Join(decoy, "gh", "hosts.yml"), "x")
+
+	mustRun(t, `
+name: stub-swap
+agents:
+  stub: {harness: claude, model: m}
+workflow:
+  produce:
+    agent: stub
+    prompt: |
+      ACTION=swap
+      SOURCE=`+decoy+`
+      TARGET={{output:out.txt}}
+    outputs: [out.txt]
+`, nil)
+
+	if !exists(hosts) {
+		t.Error("the credential cleanup followed a swapped dir out of the job home")
+	}
+}
+
 // TestRunReturnsClaudeLogin holds that a login Claude Code refreshes in its
 // link's place reaches the host while the executor still runs, and the link
 // comes back. Each entry - the subscription login, each MCP server's - keeps
 // whichever copy expires later, so a login the host gained meanwhile
 // survives; a login cleared as dead never overwrites the host's.
 func TestRunReturnsClaudeLogin(t *testing.T) {
+	if onMacOS {
+		t.Skip("the login lives in the shared Keychain on macOS")
+	}
+
 	const hostLogin = `{"claudeAiOauth":{"expiresAt":1000},` +
 		`"mcpOAuth":{"a":{"expiresAt":5000},"b":{"expiresAt":1000},"c":{"expiresAt":1}}}`
 
@@ -764,8 +803,13 @@ func assertExecutorEnv(t *testing.T, home string) {
 
 	// Engine-side, shared by every executor, so no job re-installs the ACP
 	// adapter or refills the Go caches into its bare home.
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatalf("resolve cache dir: %v", err)
+	}
+
 	for key, rel := range sharedCaches {
-		want[key] = filepath.Join(os.Getenv("XDG_CACHE_HOME"), rel)
+		want[key] = filepath.Join(cache, rel)
 		if !exists(want[key]) {
 			t.Errorf("the shared %s dir was not created", key)
 		}
@@ -867,6 +911,10 @@ workflow:
 	}
 
 	home := filepath.Join(res.RunDir, jobsDir, "produce", homeDir)
+
+	if argv := readFile(t, filepath.Join(home, "argv.txt")); !strings.Contains(argv, "\ncodex\nexec\n") {
+		t.Errorf("acpx argv = %q, want the built-in codex agent by name", argv)
+	}
 
 	if got := readFile(t, filepath.Join(home, ".codex", "config.toml")); got != codexConfig {
 		t.Errorf("codex config = %q, want the engine's own", got)

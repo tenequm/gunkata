@@ -120,7 +120,7 @@ type Profile struct {
 	Skills         []string          `yaml:"skills"`
 	MCPs           []mcpEntry        `yaml:"mcps"`
 	// ACPAdapter pins the npm package acpx runs as the harness's adapter;
-	// unset keeps acpx's built-in one.
+	// unset takes the engine's default for the harness, else acpx's built-in.
 	ACPAdapter string `yaml:"acp_adapter"`
 	// AppendSystemPrompt is text appended to the agent's system prompt.
 	AppendSystemPrompt string `yaml:"append_system_prompt"`
