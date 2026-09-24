@@ -37,9 +37,15 @@ workflow:                      # map of jobs = the DAG
                                #   message.md is the agent's final message
     post-steps:                # the done-bit; all exit 0 = verified
       - <step>
+    fan-out:                   # optional: makes the job a round head
+      items: <output>          #   a directory output; each entry is one work item
+      job: <job>               #   the template job, run once per item
+      max_rounds: <int>        #   hard cap on rounds
+      max_items: <int>         #   hard cap on one round's items
 ```
 
-Four top-level keys. Seven job keys. Unknown fields are rejected.
+Four top-level keys. Eight job keys. Unknown fields are rejected. A job name is
+letters, digits, `-` or `_`.
 
 ## Agents
 
@@ -118,6 +124,59 @@ evidence.
 Failure parks the job, and nothing that needs it ever runs. There is no retry in v1;
 retry arrives only with transcript-based failure classification (principle 2).
 
+## Fan-out
+
+A job with `fan-out:` is a **round head**: the one place where the shape of the run comes
+from what a job found rather than from the file. Each round is
+
+1. the head runs, as an ordinary job, and leaves zero or more entries in its `items`
+   directory - one entry per unit of work it wants done, the entry's content the brief;
+2. the engine runs `job` - the **template** - once per entry, all in parallel, each
+   instance an ordinary job with `{{item}}` expanded to that entry's absolute path;
+3. the loop repeats.
+
+It ends when a round leaves no entry, or when `max_rounds` rounds have run. Both are
+required: the first is the kata's own answer that it is finished, the second is the bound
+that holds when it never gives one. `max_items` bounds one round's width; a round that
+exceeds it parks the head rather than truncating silently. The head's record is the
+loop's verdict, so a dependent releases on the whole loop, never on one round.
+
+A round is not a retry. Each round is new work over new inputs.
+
+**A round is sampled work, so one instance parking does not end it.** The instances of a
+round are independent investigations, not links in a chain: an answer that never comes
+back is a missing sample, and the round carries on without it. The engine records the
+parked instance, writes `parked.md` into its artifact directory - the item it was given
+and why it did not come back - and runs the next round; the head still runs, and the
+head's dependents still release. `{{fanout:<template>}}` reaches that note like any other
+artifact, so a head cannot mistake a question that failed for one that was never asked. A
+template may not declare an output named `parked.md`; the engine owns it.
+
+Everything else still parks the run: a parked **head** instance, a parked declared job, a
+round over `max_items`, a failed pre-step. The run's own outcome still records the park -
+`succeeded` means every job did, instances included - so a run whose report was written
+over a missing sample says so.
+
+The template is scheduled only by its fan-out: it declares no `needs`, no job may need
+it, it may not fan out in turn, and only one fan-out may name it. Its context is
+`{{item}}`, the params, and the artifacts of jobs that ran before the head.
+
+Every instance is a full job: its own directories, its own executor HOME, its own output
+and post-step checks. Instances are named for their place in the loop, and the run dir
+follows: the head's round *r* is `<head>/round-<r>`, its *i*-th item
+`<template>/round-<r>/item-<i>`, with artifacts under `artifacts/` at the same path.
+`record.json` names every instance that ran, with the item each was given, and carries
+one `fan_out` entry per head: the rounds it ran, the item and parked counts of each, and
+whether `max_rounds` stopped it. `gunkata.log` adds `fan-out start`, `fan-out round`,
+`fan-out item parked` and `fan-out end`.
+
+Because a head and a template have no single artifact directory, `{{artifact:<job>/...}}`
+of either is a load error; `{{fanout:<job>}}` names the whole tree instead.
+
+The `items` directory is the one output exempt from the non-empty check - an empty one is
+the loop's terminating answer. The engine creates it before each round, so a head that
+finds nothing has nothing to do.
+
 ## Steps
 
 A step is an argv array, or a string parsed into one at load with quote-aware word
@@ -129,11 +188,14 @@ as one argv.
 
 ## Placeholders
 
-Three kinds, expanded in one pass, to absolute paths only:
+Four kinds, expanded in one pass, to absolute paths only:
 
 - `{{param:key}}` - the bound value of a param
 - `{{output:name}}` - the job's own output, under `artifacts/<job>/`
 - `{{artifact:job/name}}` - an upstream job's output
+- `{{fanout:job}}` - a fan-out head's or template's whole tree, `artifacts/<job>/`; the
+  head reads its own earlier rounds through it, and so does anything that needs the head
+- `{{item}}` - the work item a fan-out instance was given; only in a template
 
 No content splicing, no expressions, no second pass. Referencing an artifact does not
 create an edge; only `needs:` does. An agent job's final message is the output
@@ -152,7 +214,12 @@ credential-free operation.
    to the snapshot - the run dir is a complete, self-contained evidence record.
 2. Validate: unresolved profile/need/param/artifact references, malformed steps, and
    cycles are rejected before anything runs.
-3. Execute: roots start; each verified job releases its dependents.
+3. Execute: roots start; each verified job releases its dependents. With a fan-out in the
+   kata the DAG is no longer fully known at load time - the declared jobs, their edges
+   and every template are, but how many instances run is decided mid-run by what a head
+   found. What ran is reconstructable after the fact from the run dir alone: every
+   instance has its own job directory, its own record entry naming its item, and its own
+   log events.
 4. Every job gets its own directories and its executor its own HOME; teardown kills the
    whole process tree.
 
@@ -185,10 +252,25 @@ Held here in quarantine until each proves its keep:
 3. **A run ends when its process tree is dead.** Teardown is part of the run contract;
    the engine owns the full tree via process groups.
 
+Fan-out changes exactly one of the promises around them: the DAG is known at load time no
+longer. The rest hold unchanged - an instance's work item and its outputs are files in the
+run dir, it gets its own directories and HOME, nothing is ever retried, and teardown still
+owns the whole tree. What fan-out costs is a load-time answer to "how much will this run
+do"; `max_rounds` and `max_items` are what replaces it.
+
+**Verified completion is untouched by the tolerated park**, and the distinction is worth
+stating precisely. Every instance is still held to its own declared outputs and
+post-steps: a parked instance parked *because* its evidence did not pass, and it is
+recorded parked. What tolerates a missing answer is the **round**, not the job - no job
+ever skips its own gate, and no dependent releases on a job that failed one. A round asks
+several independent questions at once and reports how many came back, which is a
+different thing from a job claiming it is done.
+
 ## Deliberately absent
 
 No templating, includes, extends, or expression language - repetitive katas are generated
 by a real program; the file stays dumb. No shell in any declared command. No secrets in
 the file - executor auth inherits from the environment, MCP keys ride `${VAR}`. Matrix,
 workspace provisioning, retry, allow_failure, and concurrency knobs stay out until a real
-kata demands them.
+kata demands them - a fan-out is not a matrix: its items come from a job at runtime, never
+from the file.

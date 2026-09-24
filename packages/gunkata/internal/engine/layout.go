@@ -74,9 +74,25 @@ type record struct {
 	Skills map[string]string `json:"skills,omitempty"`
 	// PrivateTmp states whether executors saw their own /tmp or the host's,
 	// and TmpReason why not; absent in a run with no executor.
-	PrivateTmp *bool                 `json:"private_tmp,omitempty"`
-	TmpReason  string                `json:"private_tmp_reason,omitempty"`
-	Jobs       map[string]*jobRecord `json:"jobs"`
+	PrivateTmp *bool  `json:"private_tmp,omitempty"`
+	TmpReason  string `json:"private_tmp_reason,omitempty"`
+	// FanOut holds one entry per fan-out head: how the loop ended, and how
+	// many items each round produced. Jobs carries the instances themselves,
+	// keyed <job>/round-<r> and <template>/round-<r>/item-<i>.
+	FanOut map[string]*fanOutRecord `json:"fan_out,omitempty"`
+	Jobs   map[string]*jobRecord    `json:"jobs"`
+}
+
+// fanOutRecord is how one fan-out loop ended: the rounds it ran, the item and
+// parked counts of each, and whether max_rounds stopped it rather than an
+// empty round.
+type fanOutRecord struct {
+	Rounds int   `json:"rounds"`
+	Items  []int `json:"items"`
+	// Parked counts the instances of each round that did not come back. The
+	// round tolerated them; the run's outcome still records them.
+	Parked []int `json:"parked"`
+	Capped bool  `json:"capped"`
 }
 
 // jobRecord holds one job's evidence. A nil field means that evidence never
@@ -94,6 +110,9 @@ type jobRecord struct {
 	// SkippedMCPs names the optional MCP servers left out for an unset
 	// variable.
 	SkippedMCPs []string `json:"skipped_mcps,omitempty"`
+	// Item is the work item a fan-out instance was given, absent on any
+	// other job.
+	Item string `json:"item,omitempty"`
 }
 
 // layout is one run's directory and the paths inside it.

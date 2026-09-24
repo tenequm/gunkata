@@ -86,6 +86,28 @@ case "$action" in
   empty)  : > "$target" ;;
   mkdir)  mkdir -p "$target" ;;
   none)   echo "wrote nothing" ;;
+  items)  # a fan-out head: COUNT items in round 1, none in any later round
+    mkdir -p "$target"
+    if [[ "$(basename "$(dirname "$HOME")")" == "round-1" ]]; then
+      for i in $(seq 1 "$(field COUNT)"); do
+        printf 'work %s\n' "$i" > "$target/item-$i.md"
+      done
+    fi
+    ;;
+  rounds) # a fan-out head that emits COUNT items in round 1 and one in round 2,
+          # then none: the loop has to reach round 3 for this to end
+    mkdir -p "$target"
+    case "$(basename "$(dirname "$HOME")")" in
+      round-1) n="$(field COUNT)" ;;
+      round-2) n=1 ;;
+      *)       n=0 ;;
+    esac
+    for i in $(seq 1 "$n"); do printf 'work %s\n' "$i" > "$target/item-$i.md"; done
+    ;;
+  loop)   # a fan-out head that never runs dry, so max_rounds has to stop it
+    mkdir -p "$target"
+    printf 'again\n' > "$target/item-1.md"
+    ;;
   mute)   # a turn that ends on a tool call: no final message
     printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"toolu_2","title":"Read","kind":"read","status":"completed"}}}'
     ;;
