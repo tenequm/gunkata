@@ -45,19 +45,19 @@
           };
         };
 
-      pondVersion = "0.18.0";
+      pondVersion = "0.19.0";
       pondAssets = {
         x86_64-linux = {
           target = "x86_64-unknown-linux-gnu";
-          hash = "sha256-r6JHUwnptf84ikyCIi2ssfYEtliSl2oaeznvSMxM7aQ=";
+          hash = "sha256-Y3WLDwpUFNd1bhMkIm/yQYWSPPRv8tIIyKZz8U5G2mg=";
         };
         aarch64-linux = {
           target = "aarch64-unknown-linux-gnu";
-          hash = "sha256-koyagHn8nvy+eAkVxHpQUxtL8j4qg1Vk5npKrR6cJWc=";
+          hash = "sha256-kTsrtSNSu8nWQYgv6i4FzaniOKD6Q4vI0UY5gdMdfDU=";
         };
         aarch64-darwin = {
           target = "aarch64-apple-darwin";
-          hash = "sha256-S9XDqeEOQLd8JUQY3KlLa5m17YAfohILmodp1kGoXRg=";
+          hash = "sha256-SLGIkjbZI9ZzQX7oiUjzf0yQL5lc3n+cS96jhaX2PGU=";
         };
       };
 
