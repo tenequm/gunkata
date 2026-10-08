@@ -92,3 +92,40 @@ workflow:
     needs: [summarize]
     post-steps:
       - [test, -s, "{{artifact:summarize/message.md}}"]
+
+  # A fan-out head: the engine runs `dig` once per entry this job leaves in its
+  # items directory, then runs the head again, until a round leaves none or
+  # max_rounds is reached. The head reads its own earlier rounds and every
+  # instance's artifacts through {{fanout:...}}.
+  chase:
+    agent: executor
+    needs: [publish]
+    prompt: |
+      Read {{artifact:check/review.md}} and everything under {{fanout:dig}} from
+      earlier rounds. Write one file per question still worth chasing into
+      {{output:items}}, each the whole brief for it; write none when the last
+      round answered everything. Write what you now believe to {{output:state.md}}.
+    outputs: [items, state.md]
+    fan-out:
+      items: items              # the directory output whose entries are the work items
+      job: dig                  # the template job, one instance per entry
+      max_rounds: 3             # the loop's hard cap
+      max_items: 8              # one round's width; over it the head parks
+
+  # The template: never scheduled on its own, declares no needs, nothing needs
+  # it. {{item}} is the absolute path of the entry this instance was given.
+  # An instance that parks does not end the loop: the engine writes parked.md
+  # into its artifact directory and the round carries on without its answer.
+  dig:
+    agent: executor
+    prompt: |
+      Answer the brief at {{item}} against the repository at
+      {{artifact:work/repo}}. Your final message is the answer.
+    outputs: [message.md]
+
+  # A dependent of the head releases on the whole loop, and reads the tree.
+  wrap:
+    needs: [chase]
+    post-steps:
+      - [test, -d, "{{fanout:chase}}"]
+      - [test, -d, "{{fanout:dig}}"]
